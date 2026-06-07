@@ -811,7 +811,61 @@ window.showFilePreview = function(fileUuid, fileName, fileSize, fileMime) {
         }
         
         // Текстовые файлы по расширению
-        var textExts = ['txt', 'md', 'json', 'xml', 'html', 'css', 'js', 'ini', 'conf', 'log'];
+                // ==================== BLOCK START: Text and HTML files preview v6.7 ====================
+        // ver.6.6 - Базовая версия
+        // ver.6.7 (2026-06-07) - ДОБАВЛЕНА ПОДДЕРЖКА HTML ФАЙЛОВ
+        // - HTML файлы рендерятся в iframe с sandbox для безопасности
+        // - Добавлены расширения .html, .htm
+
+        var textExts = ['txt', 'md', 'json', 'xml', 'ini', 'conf', 'log'];
+        var htmlExts = ['html', 'htm'];
+        var isHtmlFile = (htmlExts.indexOf(ext) !== -1);
+        
+        // HTML файлы — рендерим в iframe
+        if (isHtmlFile) {
+            safeLog('[file_preview] Detected as HTML file, rendering in iframe');
+            var htmlUrl = window.APP_BASE + '/download.php?file=' + encodeURIComponent(fileUuid) + '&preview=1&inline=1';
+            
+            var wrapper = document.createElement('div');
+            wrapper.style.cssText = 'width:100%; height:100%; display:flex; flex-direction:column; background:#fff; position:relative;';
+            
+            // Информационная панель
+            var infoBar = document.createElement('div');
+            infoBar.style.cssText = 'padding:8px 16px; background:#f1f5f9; border-bottom:1px solid #cbd5e1; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;';
+            infoBar.innerHTML = `
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <span style="font-size:14px; font-weight:500;color: #000000 !important;">🌐 ${escapeHtmlStatic(fileName)}</span>
+                    <span style="font-size:11px; color:#64748b;">${formatFileSizeStatic(fileSize)}</span>
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button class="preview-btn" onclick="window.location.href='${window.APP_BASE}/download.php?file=${encodeURIComponent(fileUuid)}&download=1'" 
+                            style="background:#4f7cff; border:none; padding:6px 14px; border-radius:6px; color:white; cursor:pointer; font-size:12px;">📥 Скачать</button>
+                    <button class="preview-btn" onclick="window.open('${htmlUrl}', '_blank')" 
+                            style="background:#10b981; border:none; padding:6px 14px; border-radius:6px; color:white; cursor:pointer; font-size:12px;">🔗 Открыть в новой вкладке</button>
+                </div>
+            `;
+            wrapper.appendChild(infoBar);
+            
+            // iframe для безопасного просмотра HTML
+            var iframe = document.createElement('iframe');
+            iframe.src = htmlUrl;
+            iframe.style.cssText = 'flex:1; width:100%; border:none; background:#fff;';
+            // sandbox ограничивает возможности скриптов для безопасности
+            iframe.sandbox = 'allow-same-origin allow-scripts allow-popups allow-forms allow-modals';
+            iframe.setAttribute('title', fileName);
+            
+            wrapper.appendChild(iframe);
+            
+            if (contentDiv) {
+                contentDiv.innerHTML = '';
+                contentDiv.appendChild(wrapper);
+            }
+            clearImageZoom();
+            window._processingFilePreview = false;
+            return;
+        }
+        
+        // Обычные текстовые файлы
         if (textExts.indexOf(ext) !== -1) {
             fetch(window.APP_BASE + '/download.php?file=' + encodeURIComponent(fileUuid) + '&preview=1')
                 .then(function(response) { return response.text(); })

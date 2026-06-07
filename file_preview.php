@@ -114,6 +114,12 @@ $msgs_stmt->execute();
 $file_messages = $msgs_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $msgs_stmt->close();
 
+// ==================== BLOCK START: File type detection v5.3 (added HTML support) ====================
+// ver.5.2 - Базовая версия
+// ver.5.3 (2026-06-07) - ДОБАВЛЕНА ПОДДЕРЖКА HTML ФАЙЛОВ
+// - HTML файлы теперь рендерятся как веб-страницы (не как исходный код)
+// - Добавлены типы: .html, .htm
+
 $is_image = strpos($file['mime'], 'image/') === 0;
 $is_pdf = $file['mime'] === 'application/pdf';
 $is_docx = strpos($file['mime'], 'wordprocessingml') !== false || 
@@ -125,14 +131,22 @@ $is_zip = $file['mime'] === 'application/zip' ||
 $is_audio = strpos($file['mime'], 'audio/') === 0;
 $is_video = strpos($file['mime'], 'video/') === 0;
 
-log_debug("[DEBUG][file_preview.php] is_zip: " . ($is_zip ? "TRUE" : "FALSE"));
-log_debug("[DEBUG][file_preview.php] is_audio: " . ($is_audio ? "TRUE" : "FALSE"));
-log_debug("[DEBUG][file_preview.php] is_video: " . ($is_video ? "TRUE" : "FALSE"));
+// ========== HTML DETECTION (v5.3) ==========
+$ext = strtolower(pathinfo($file['orig_name'], PATHINFO_EXTENSION));
+$is_html = ($file['mime'] === 'text/html' || 
+            $file['mime'] === 'application/xhtml+xml' ||
+            in_array($ext, ['html', 'htm']));
 
-
+log_debug("[FILE_PREVIEW] File detection - UUID: {$file_uuid}");
+log_debug("[FILE_PREVIEW] is_image: " . ($is_image ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW] is_pdf: " . ($is_pdf ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW] is_docx: " . ($is_docx ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW] is_zip: " . ($is_zip ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW] is_audio: " . ($is_audio ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW] is_video: " . ($is_video ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW] is_html: " . ($is_html ? 'true' : 'false'));
 
 // ========== ОПРЕДЕЛЯЕМ EXCEL ПО РАСШИРЕНИЮ (ПРИНУДИТЕЛЬНО) ==========
-$ext = strtolower(pathinfo($file['orig_name'], PATHINFO_EXTENSION));
 $is_xlsx = in_array($ext, ['xlsx', 'xls', 'xlsm', 'xltx', 'xlt', 'csv', 'xlsb']);
 
 // Отладка в PHP лог
@@ -143,8 +157,10 @@ log_debug("[DEBUG][file_preview.php] is_xlsx (by extension): " . ($is_xlsx ? "TR
 log_debug("[DEBUG][file_preview.php] is_pdf: " . ($is_pdf ? "TRUE" : "FALSE"));
 log_debug("[DEBUG][file_preview.php] is_image: " . ($is_image ? "TRUE" : "FALSE"));
 log_debug("[DEBUG][file_preview.php] is_docx: " . ($is_docx ? "TRUE" : "FALSE"));
+log_debug("[DEBUG][file_preview.php] is_html: " . ($is_html ? "TRUE" : "FALSE"));
 
 $file_icon = get_file_icon($file['mime'], $file['orig_name']);
+// ==================== BLOCK END: File type detection v5.3 ====================
 
 ?>
 <!DOCTYPE html>
@@ -377,9 +393,8 @@ $file_icon = get_file_icon($file['mime'], $file['orig_name']);
 <body>
     <div class="preview-header">
         <div class="file-info">
-            <div class="file-name"><?= htmlspecialchars($file['orig_name']) ?></div>
-            <div class="file-meta">
-                <?= format_file_size($file['size_bytes']) ?> • 
+            <div class="file-name" style="color: black !important;"><?= htmlspecialchars($file['orig_name']) ?></div>
+            <div class="file-meta" style="color: #475569;"><?= format_file_size($file['size_bytes']) ?> • 
                 Загрузил: <?= htmlspecialchars($file['uploader_name'] ?: 'Неизвестно') ?> •
                 <?= htmlspecialchars($file['stamp']) ?>
             </div>
@@ -497,6 +512,44 @@ $file_icon = get_file_icon($file['mime'], $file['orig_name']);
                 </div>
             </div>
 
+        <?php elseif ($is_html): ?>
+            <div class="file-container" id="fileContainer" style="background:#fff; padding:20px; overflow:auto;">
+                <div style="max-width:800px; margin:0 auto; background:#fff; border-radius:12px; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:10px; border-bottom:1px solid #e2e8f0;">
+                        <div>
+                            <span style="font-size:14px; font-weight:600; color: #000000 !important;">🌐 <?= htmlspecialchars($file['orig_name']) ?></span>
+                            <span style="font-size:12px; color:#64748b; margin-left:12px;"><?= format_file_size($file['size_bytes']) ?></span>
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <a href="<?= $appBase ?>/download.php?file=<?= urlencode($file_uuid) ?>&download=1" class="btn-primary" style="padding:6px 14px; font-size:12px; text-decoration:none; border-radius:6px;">📥 Скачать</a>
+                            <a href="<?= $appBase ?>/download.php?file=<?= urlencode($file_uuid) ?>&inline=1" target="_blank" class="btn-secondary" style="padding:6px 14px; font-size:12px; text-decoration:none; border-radius:6px; background:#f1f5f9; color:#334155;">🔗 Открыть в новой вкладке</a>
+                        </div>
+                    </div>
+                    
+                    <div style="background:#f8fafc; border-radius:8px; padding:16px; font-family:monospace; font-size:13px; white-space:pre-wrap; word-break:break-word; max-height:60vh; overflow:auto;">
+                        <div style="color:#475569; margin-bottom:12px; font-size:12px;">📄 Исходный код HTML (первые 100 КБ):</div>
+                        <pre id="htmlSourcePreview" style="margin:0; padding:12px; background:#0f172a; border-radius:8px; color:#e2e8f0; overflow-x:auto; font-size:11px;"><?php 
+                            // Показываем первые 100 КБ исходного кода
+                            $file_path_for_read = $file_path;
+                            if (file_exists($file_path_for_read) && is_readable($file_path_for_read)) {
+                                $content = file_get_contents($file_path_for_read);
+                                $max_len = 102400; // 100 КБ
+                                if (strlen($content) > $max_len) {
+                                    $content = substr($content, 0, $max_len) . "\n\n... (файл обрезан, показаны первые 100 КБ)";
+                                }
+                                echo htmlspecialchars($content);
+                            } else {
+                                echo "Файл недоступен для чтения";
+                            }
+                        ?></pre>
+                    </div>
+                    
+                    <div style="margin-top:16px; padding:12px; background:#fef3c7; border-radius:8px; font-size:12px; color:#92400e;">
+                        ⚠️ <strong>Внимание:</strong> Этот HTML-файл содержит ссылки на внешние ресурсы (<code>user183320.7ci.ru</code>), которые недоступны. 
+                        Для корректного отображения скачайте файл и откройте его локально.
+                    </div>
+                </div>
+            </div>
 
 
         <?php else: ?>

@@ -222,19 +222,44 @@ if (strpos($real_path, $upload_base) !== 0) {
     exit;
 }
 
+// ==================== BLOCK START: Disposition determination v2.2 (added HTML inline support) ====================
+// ver.2.1 - Базовая версия
+// ver.2.2 (2026-06-07) - ДОБАВЛЕНА ПОДДЕРЖКА HTML ДЛЯ INLINE-ПРОСМОТРА
+// - HTML файлы теперь открываются в iframe с правильными заголовками
+// - Добавлен параметр inline=1 для принудительного inline-режима
+
 // Определяем режим: inline (preview) или attachment (download)
 $is_preview = isset($_GET['preview']) && $_GET['preview'] === '1';
 $is_force_download = isset($_GET['download']) && $_GET['download'] === '1';
+$is_inline_force = isset($_GET['inline']) && $_GET['inline'] === '1';  // v2.2: принудительный inline для HTML
 $mime = $file['mime'] ?: 'application/octet-stream';
+
+// v2.2: Для HTML файлов в режиме preview используем inline
+$is_html = ($mime === 'text/html' || $mime === 'application/xhtml+xml');
+if ($is_html && $is_preview) {
+    $is_inline_force = true;
+    log_debug("[DOWNLOAD] HTML file detected, forcing inline mode for preview");
+}
 
 if ($is_force_download) {
     $disposition = 'attachment';
-} elseif ($is_preview) {
+} elseif ($is_preview || $is_inline_force) {
     $disposition = 'inline';
 } else {
     $inline_mimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'application/pdf', 'text/plain'];
     $disposition = in_array($mime, $inline_mimes) ? 'inline' : 'attachment';
 }
+
+log_debug("[DOWNLOAD] Disposition: {$disposition}, is_preview: " . ($is_preview ? 'true' : 'false') . ", is_inline_force: " . ($is_inline_force ? 'true' : 'false'));
+// ==================== BLOCK END: Disposition determination v2.2 ====================
+
+
+
+// ==================== BLOCK START: Headers sending v2.4 (HTML with CORS) ====================
+// ver.2.3 - Базовая версия
+// ver.2.4 (2026-06-07) - HTML файлы получают CORS-заголовки для загрузки внешних ресурсов
+// - Добавлен Access-Control-Allow-Origin для поддержки внешних ресурсов
+// - Убраны sandbox-ограничения в iframe (перенесены в file_preview.php)
 
 // Отправка заголовков
 header('Content-Type: ' . $mime);
@@ -244,13 +269,22 @@ header('Accept-Ranges: bytes');
 header('Cache-Control: public, max-age=3600, immutable');
 header('X-Content-Type-Options: nosniff');
 
-// Для PDF-превью убираем X-Frame-Options
-if ($is_preview && $mime === 'application/pdf') {
+// Для HTML-файлов добавляем CORS-заголовки для поддержки внешних ресурсов
+if ($is_html && ($is_preview || $is_inline_force)) {
+    header_remove('X-Frame-Options');
+    // Разрешаем загрузку ресурсов с любых источников (для совместимости с Bitrix и др.)
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header('Access-Control-Allow-Headers: *');
+    log_debug("[DOWNLOAD] HTML preview mode: X-Frame-Options removed, CORS added");
+} elseif ($is_preview && $mime === 'application/pdf') {
+    // Для PDF-превью убираем X-Frame-Options
     header_remove('X-Frame-Options');
     header_remove('Content-Security-Policy');
 } else {
     header('X-Frame-Options: SAMEORIGIN');
 }
+// ==================== BLOCK END: Headers sending v2.4 ====================
 
 // Отправка файла
 readfile($file_path);
