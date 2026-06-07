@@ -40,6 +40,38 @@ if (!$file) {
     exit;
 }
 
+
+// ==================== BLOCK START: File type detection v5.5 (early for thumbnails) ====================
+// ver.5.5 (2026-06-07) - ВЫНЕСЕНО ОПРЕДЕЛЕНИЕ ТИПОВ ФАЙЛОВ В НАЧАЛО для миниатюр
+// (перенесено из нижней части скрипта, чтобы $is_image была доступна для генерации thumbnails)
+
+$ext = strtolower(pathinfo($file['orig_name'], PATHINFO_EXTENSION));
+
+$is_image = strpos($file['mime'], 'image/') === 0;
+$is_pdf = $file['mime'] === 'application/pdf';
+$is_docx = strpos($file['mime'], 'wordprocessingml') !== false || 
+$file['mime'] === 'application/msword' || in_array($ext, ['docx', 'doc']);
+
+$is_zip = $file['mime'] === 'application/zip' || 
+          $file['mime'] === 'application/x-zip-compressed' ||
+          in_array($ext, ['zip', 'rar', '7z']);
+$is_audio = strpos($file['mime'], 'audio/') === 0;
+$is_video = strpos($file['mime'], 'video/') === 0;
+
+$is_html = ($file['mime'] === 'text/html' || 
+            $file['mime'] === 'application/xhtml+xml' ||
+            in_array($ext, ['html', 'htm']));
+
+$is_xlsx = in_array($ext, ['xlsx', 'xls', 'xlsm', 'xltx', 'xlt', 'csv', 'xlsb']);
+
+log_debug("[FILE_PREVIEW][EARLY] File detection - UUID: {$file_uuid}");
+log_debug("[FILE_PREVIEW][EARLY] is_image: " . ($is_image ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW][EARLY] is_pdf: " . ($is_pdf ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW][EARLY] is_docx: " . ($is_docx ? 'true' : 'false'));
+log_debug("[FILE_PREVIEW][EARLY] ext: {$ext}, is_xlsx: " . ($is_xlsx ? 'true' : 'false'));
+// ==================== BLOCK END: File type detection v5.5 ====================
+
+
 // Проверка доступа
 $has_access = false;
 $stmt = $db->prepare("SELECT DISTINCT m.task_uuid FROM messages m JOIN message_files mf ON m.uuid = mf.message_uuid WHERE mf.file_uuid = ? LIMIT 1");
@@ -67,6 +99,153 @@ if (!$has_access) {
 if (!$has_access && $is_admin) {
     $has_access = true;
 }
+
+// ==================== BLOCK START: Thumbnail generation v5.4 ====================
+// ver.5.4 (2026-06-07) - ДОБАВЛЕНА ГЕНЕРАЦИЯ МИНИАТЮР ДЛЯ ИЗОБРАЖЕНИЙ
+// Поддержка параметров: thumb=1, size=N (размер в пикселях)
+
+$is_thumb_mode = isset($_GET['thumb']) && ($_GET['thumb'] == '1' || $_GET['thumb'] == 1);
+$thumb_size = isset($_GET['size']) ? (int)$_GET['size'] : 150;
+if ($thumb_size < 20) $thumb_size = 20;
+if ($thumb_size > 500) $thumb_size = 500;
+
+log_debug("[FILE_PREVIEW] is_thumb_mode: " . ($is_thumb_mode ? 'true' : 'false') . ", thumb_size: {$thumb_size}");
+
+if ($is_thumb_mode && $is_image) {
+    log_debug("[FILE_PREVIEW] Generating thumbnail for image: {$file['orig_name']}, size: {$thumb_size}px");
+    
+    $storage_path = null;
+    $possible_paths = [
+        __DIR__ . '/uploads/tasks/' . $file['storage_name'],
+        __DIR__ . '/uploads/messages/' . $file['storage_name']
+    ];
+    
+    foreach ($possible_paths as $path) {
+        if (file_exists($path) && is_readable($path)) {
+            $storage_path = $path;
+            log_debug("[FILE_PREVIEW] Found file at: {$path}");
+            break;
+        }
+    }
+    
+    if (!$storage_path) {
+        log_warning("[FILE_PREVIEW] File not found on disk: {$file['storage_name']}");
+        http_response_code(404);
+        header('Content-Type: image/svg+xml');
+        echo '<svg xmlns="http://www.w3.org/2000/svg" width="'.$thumb_size.'" height="'.$thumb_size.'" viewBox="0 0 100 100"><rect width="100" height="100" fill="#1a1a2e"/><text x="50" y="55" font-size="40" text-anchor="middle" fill="#f87171">❌</text><text x="50" y="80" font-size="12" text-anchor="middle" fill="#e9eefc">Not Found</text></svg>';
+        exit;
+    }
+    
+    // Определяем тип изображения
+    $mime_type = $file['mime'];
+    $extension = strtolower(pathinfo($storage_path, PATHINFO_EXTENSION));
+    
+    // Создаём изображение в зависимости от типа
+    $source_image = null;
+    $is_gd_available = extension_loaded('gd');
+    
+    if (!$is_gd_available) {
+        log_error("[FILE_PREVIEW] GD library not available for thumbnail generation");
+        http_response_code(500);
+        header('Content-Type: image/svg+xml');
+        echo '<svg xmlns="http://www.w3.org/2000/svg" width="'.$thumb_size.'" height="'.$thumb_size.'" viewBox="0 0 100 100"><rect width="100" height="100" fill="#1a1a2e"/><text x="50" y="55" font-size="20" text-anchor="middle" fill="#f59e0b">⚠️</text><text x="50" y="80" font-size="10" text-anchor="middle" fill="#e9eefc">GD not available</text></svg>';
+        exit;
+    }
+    
+    switch ($mime_type) {
+        case 'image/jpeg':
+        case 'image/jpg':
+            $source_image = @imagecreatefromjpeg($storage_path);
+            break;
+        case 'image/png':
+            $source_image = @imagecreatefrompng($storage_path);
+            break;
+        case 'image/gif':
+            $source_image = @imagecreatefromgif($storage_path);
+            break;
+        case 'image/webp':
+            if (function_exists('imagecreatefromwebp')) {
+                $source_image = @imagecreatefromwebp($storage_path);
+            }
+            break;
+        case 'image/bmp':
+            if (function_exists('imagecreatefrombmp')) {
+                $source_image = @imagecreatefrombmp($storage_path);
+            }
+            break;
+        default:
+            // Пробуем определить по расширению
+            if ($extension === 'jpg' || $extension === 'jpeg') {
+                $source_image = @imagecreatefromjpeg($storage_path);
+            } elseif ($extension === 'png') {
+                $source_image = @imagecreatefrompng($storage_path);
+            } elseif ($extension === 'gif') {
+                $source_image = @imagecreatefromgif($storage_path);
+            } elseif ($extension === 'webp') {
+                $source_image = function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($storage_path) : null;
+            }
+            break;
+    }
+    
+    if (!$source_image) {
+        log_error("[FILE_PREVIEW] Failed to load source image: {$storage_path}");
+        http_response_code(500);
+        header('Content-Type: image/svg+xml');
+        echo '<svg xmlns="http://www.w3.org/2000/svg" width="'.$thumb_size.'" height="'.$thumb_size.'" viewBox="0 0 100 100"><rect width="100" height="100" fill="#1a1a2e"/><text x="50" y="55" font-size="40" text-anchor="middle" fill="#f87171">🖼️</text><text x="50" y="80" font-size="10" text-anchor="middle" fill="#e9eefc">Load Error</text></svg>';
+        exit;
+    }
+    
+    // Получаем размеры исходного изображения
+    $src_width = imagesx($source_image);
+    $src_height = imagesy($source_image);
+    
+    // Вычисляем размеры миниатюры с сохранением пропорций
+    if ($src_width > $src_height) {
+        $thumb_width = $thumb_size;
+        $thumb_height = (int)($src_height * ($thumb_size / $src_width));
+    } else {
+        $thumb_height = $thumb_size;
+        $thumb_width = (int)($src_width * ($thumb_size / $src_height));
+    }
+    
+    // Создаём пустое изображение для миниатюры
+    $thumb_image = imagecreatetruecolor($thumb_width, $thumb_height);
+    
+    // Включаем альфа-канал для PNG
+    if ($mime_type === 'image/png' || $extension === 'png') {
+        imagealphablending($thumb_image, false);
+        imagesavealpha($thumb_image, true);
+        $transparent = imagecolorallocatealpha($thumb_image, 0, 0, 0, 127);
+        imagefill($thumb_image, 0, 0, $transparent);
+    } else {
+        // Заливаем тёмным фоном для непрозрачных изображений
+        $bg_color = imagecolorallocate($thumb_image, 17, 24, 39); // #0b1027
+        imagefill($thumb_image, 0, 0, $bg_color);
+    }
+    
+    // Копируем и масштабируем исходное изображение
+    imagecopyresampled(
+        $thumb_image, $source_image,
+        0, 0, 0, 0,
+        $thumb_width, $thumb_height,
+        $src_width, $src_height
+    );
+    
+    // Отправляем заголовки и выводим изображение
+    header('Content-Type: image/jpeg');
+    header('Cache-Control: public, max-age=86400'); // Кэш на 24 часа
+    header('X-Content-Type-Options: nosniff');
+    
+    imagejpeg($thumb_image, null, 85);
+    
+    // Освобождаем память
+    imagedestroy($source_image);
+    imagedestroy($thumb_image);
+    
+    log_debug("[FILE_PREVIEW] Thumbnail generated successfully, output size: {$thumb_width}x{$thumb_height}");
+    exit;
+}
+// ==================== BLOCK END: Thumbnail generation v5.4 ====================
 
 if (!$has_access) {
     http_response_code(403);
@@ -114,53 +293,7 @@ $msgs_stmt->execute();
 $file_messages = $msgs_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $msgs_stmt->close();
 
-// ==================== BLOCK START: File type detection v5.3 (added HTML support) ====================
-// ver.5.2 - Базовая версия
-// ver.5.3 (2026-06-07) - ДОБАВЛЕНА ПОДДЕРЖКА HTML ФАЙЛОВ
-// - HTML файлы теперь рендерятся как веб-страницы (не как исходный код)
-// - Добавлены типы: .html, .htm
 
-$is_image = strpos($file['mime'], 'image/') === 0;
-$is_pdf = $file['mime'] === 'application/pdf';
-$is_docx = strpos($file['mime'], 'wordprocessingml') !== false || 
-$file['mime'] === 'application/msword' || in_array(strtolower(pathinfo($file['orig_name'], PATHINFO_EXTENSION)), ['docx', 'doc']);
-
-$is_zip = $file['mime'] === 'application/zip' || 
-          $file['mime'] === 'application/x-zip-compressed' ||
-          in_array(strtolower(pathinfo($file['orig_name'], PATHINFO_EXTENSION)), ['zip', 'rar', '7z']);
-$is_audio = strpos($file['mime'], 'audio/') === 0;
-$is_video = strpos($file['mime'], 'video/') === 0;
-
-// ========== HTML DETECTION (v5.3) ==========
-$ext = strtolower(pathinfo($file['orig_name'], PATHINFO_EXTENSION));
-$is_html = ($file['mime'] === 'text/html' || 
-            $file['mime'] === 'application/xhtml+xml' ||
-            in_array($ext, ['html', 'htm']));
-
-log_debug("[FILE_PREVIEW] File detection - UUID: {$file_uuid}");
-log_debug("[FILE_PREVIEW] is_image: " . ($is_image ? 'true' : 'false'));
-log_debug("[FILE_PREVIEW] is_pdf: " . ($is_pdf ? 'true' : 'false'));
-log_debug("[FILE_PREVIEW] is_docx: " . ($is_docx ? 'true' : 'false'));
-log_debug("[FILE_PREVIEW] is_zip: " . ($is_zip ? 'true' : 'false'));
-log_debug("[FILE_PREVIEW] is_audio: " . ($is_audio ? 'true' : 'false'));
-log_debug("[FILE_PREVIEW] is_video: " . ($is_video ? 'true' : 'false'));
-log_debug("[FILE_PREVIEW] is_html: " . ($is_html ? 'true' : 'false'));
-
-// ========== ОПРЕДЕЛЯЕМ EXCEL ПО РАСШИРЕНИЮ (ПРИНУДИТЕЛЬНО) ==========
-$is_xlsx = in_array($ext, ['xlsx', 'xls', 'xlsm', 'xltx', 'xlt', 'csv', 'xlsb']);
-
-// Отладка в PHP лог
-log_debug("[DEBUG][file_preview.php] File UUID: " . $file_uuid);
-log_debug("[DEBUG][file_preview.php] File MIME: " . $file['mime']);
-log_debug("[DEBUG][file_preview.php] File extension: " . $ext);
-log_debug("[DEBUG][file_preview.php] is_xlsx (by extension): " . ($is_xlsx ? "TRUE" : "FALSE"));
-log_debug("[DEBUG][file_preview.php] is_pdf: " . ($is_pdf ? "TRUE" : "FALSE"));
-log_debug("[DEBUG][file_preview.php] is_image: " . ($is_image ? "TRUE" : "FALSE"));
-log_debug("[DEBUG][file_preview.php] is_docx: " . ($is_docx ? "TRUE" : "FALSE"));
-log_debug("[DEBUG][file_preview.php] is_html: " . ($is_html ? "TRUE" : "FALSE"));
-
-$file_icon = get_file_icon($file['mime'], $file['orig_name']);
-// ==================== BLOCK END: File type detection v5.3 ====================
 
 ?>
 <!DOCTYPE html>

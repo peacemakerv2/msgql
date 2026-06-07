@@ -1,5 +1,10 @@
 <?php
-//files.php version 3.1 - ПРИОРИТЕТ: message > task
+//files.php version 3.2 - ПРИОРИТЕТ: message > task
+// version 3.2:
+//   - ДОБАВЛЕН чекбокс "Иконки" с сохранением состояния в сессии
+//   - При включенном чекбоксе вместо эмодзи-иконок показывается превью изображений
+//   - Размер превью задаётся переменной $preview_size (150px)
+//   - Превью отображается только для изображений, для остальных типов - стандартная иконка
 // version 3.1:
 //   - ИСПРАВЛЕН приоритет фильтрации: параметр message важнее task
 //   - Если передан message - игнорируем task, показываем только файлы сообщения
@@ -232,6 +237,37 @@ if (isset($_GET['type'])) {
     }
 }
 $filter_type = $_SESSION['files_filter_type'] ?? 'all';
+
+
+// ========== show_preview - сохраняем в сессии ==========
+if (isset($_GET['show_preview'])) {
+    $show_preview_val = (int)$_GET['show_preview'];
+    if ($show_preview_val === 0 || $show_preview_val === 1) {
+        $_SESSION['files_show_preview'] = $show_preview_val;
+        log_debug("[FILES] Saved show_preview to session: {$show_preview_val}");
+    }
+} else {
+    // Если параметр не передан - удаляем из сессии
+    if (isset($_SESSION['files_show_preview'])) {
+        unset($_SESSION['files_show_preview']);
+        log_debug("[FILES] Removed show_preview from session");
+    }
+}
+$show_preview = $_SESSION['files_show_preview'] ?? 0;
+// ========== КОНЕЦ БЛОКА show_preview ==========
+
+
+// ========== РАЗМЕР ПРЕВЬЮ ДЛЯ КАРТИНОК ==========
+// Размер зависит от режима: при включенном превью - 150px, при выключенном - 40px
+if ($show_preview) {
+    $preview_size = 200; // размер превью в пикселях (только для изображений)
+} else {
+    $preview_size = 40; // размер плейсхолдера в пикселях для иконок
+}
+log_debug("[FILES] Preview size: {$preview_size}px, show_preview: {$show_preview}");
+// ========== КОНЕЦ БЛОКА preview_size ==========
+
+
 
 // search - НЕ сохраняем в сессии (берем только из GET)
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
@@ -828,6 +864,35 @@ function get_file_icon($mime, $orig_name = '') {
     return '📎';
 }
 
+/**
+ * Проверяет, является ли файл изображением (для показа превью)
+ * @param array $file массив с данными файла (mime, orig_name)
+ * @return bool true если файл - изображение
+ */
+function is_image_file($file) {
+    $mime = $file['mime'] ?? '';
+    $orig_name = $file['orig_name'] ?? '';
+    $ext = strtolower(pathinfo($orig_name, PATHINFO_EXTENSION));
+    
+    $image_exts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'];
+    
+    // Проверка по MIME-типу
+    if (strpos($mime, 'image/') === 0) {
+        log_debug("[IS_IMAGE] File {$orig_name} is image by MIME: {$mime}");
+        return true;
+    }
+    
+    // Проверка по расширению
+    if (in_array($ext, $image_exts)) {
+        log_debug("[IS_IMAGE] File {$orig_name} is image by extension: {$ext}");
+        return true;
+    }
+    
+    log_debug("[IS_IMAGE] File {$orig_name} is NOT image (mime: {$mime}, ext: {$ext})");
+    return false;
+}
+// ========== КОНЕЦ ФУНКЦИИ is_image_file ==========
+
 function format_file_size($bytes) {
     if ($bytes >= 1073741824) return number_format($bytes / 1073741824, 2) . ' GB';
     if ($bytes >= 1048576) return number_format($bytes / 1048576, 2) . ' MB';
@@ -892,7 +957,9 @@ function build_where_condition($mime_like, $extension_filter, $search) {
     <script nonce="<?= CSP_NONCE ?>">
     window.currentUserUuid = '<?= $current_user_uuid ?>';
     window.currentUserIsAdmin = <?= $is_admin ? 'true' : 'false' ?>;
+    window.showPreview = <?= (int)$show_preview ?>; // ========== ДОБАВЛЕНО для режима превью ==========
     logDebug('[DEBUG] currentUserUuid set to:', window.currentUserUuid);
+    logDebug('[DEBUG] showPreview set to:', window.showPreview);
     </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -943,6 +1010,55 @@ function build_where_condition($mime_like, $extension_filter, $search) {
             color: #9bb7ff;
         }
         
+        /* ========== ПРЕВЬЮ ИЗОБРАЖЕНИЙ ========== */
+        .file-preview-img {
+            width: <?= (int)$preview_size ?>px;
+            height: <?= (int)$preview_size ?>px;
+            object-fit: contain;
+            border-radius: 8px;
+            background: #0b1020;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .file-preview-img:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 10;
+            position: relative;
+        }
+        .file-preview-placeholder {
+            width: <?= (int)$preview_size ?>px;
+            height: <?= (int)$preview_size ?>px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #121a33;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+            font-size: 48px;
+        }
+        .preview-checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            background: #121a33;
+            padding: 8px 16px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .preview-checkbox-label:hover {
+            background: #1a2440;
+        }
+        .preview-checkbox-label input {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: #4f7cff;
+        }
+        /* ========== КОНЕЦ БЛОКА ПРЕВЬЮ ========== */
+
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 12px; margin-bottom: 24px; }
         .stat-card { background: #121a33; border-radius: 12px; padding: 12px; text-align: center; border: 1px solid rgba(255,255,255,0.08); cursor: pointer; transition: all 0.2s; }
         .stat-card:hover { background: #1a2440; transform: translateY(-2px); }
@@ -1024,6 +1140,34 @@ function build_where_condition($mime_like, $extension_filter, $search) {
             .files-table th:nth-child(4), .files-table td:nth-child(4) { display: none; }
         }
     </style>
+
+     <script>
+        // ========== ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ РЕЖИМА ПРЕВЬЮ ==========
+        function togglePreviewMode() {
+            var checkbox = document.getElementById('showPreviewCheckbox');
+            var showPreview = checkbox.checked ? 1 : 0;
+            
+            logDebug('[PREVIEW] Toggling preview mode to:', showPreview);
+            
+            // Получаем текущие параметры URL
+            var urlParams = new URLSearchParams(window.location.search);
+            
+            // Устанавливаем/удаляем параметр show_preview
+            if (showPreview === 1) {
+                urlParams.set('show_preview', '1');
+            } else {
+                urlParams.delete('show_preview');
+            }
+            
+            // Сбрасываем страницу на первую при смене режима
+            urlParams.set('page', '1');
+            
+            // Показываем лоадер и перезагружаем страницу
+            showLoading();
+            window.location.href = '?' + urlParams.toString();
+        }
+        // ========== КОНЕЦ ФУНКЦИИ togglePreviewMode ==========
+    </script>
 </head>
 <body>
 
@@ -1127,7 +1271,7 @@ function build_where_condition($mime_like, $extension_filter, $search) {
                 <input type="text" name="search" class="search-input" placeholder="Поиск по имени файла..." value="<?= htmlspecialchars($search) ?>">
                 <button type="submit" class="search-btn">🔍 Найти</button>
                 <?php if ($search || ($filter_type !== 'all' && !$is_filtered_by_context) || $is_filtered_by_context): ?>
-                <a href="?<?= $is_filtered_by_context && !empty($filter_task_uuid) ? 'task=' . urlencode($filter_task_uuid) . '&' : '' ?><?= $is_filtered_by_context && !empty($filter_message_uuid) ? 'message=' . urlencode($filter_message_uuid) . '&' : '' ?>page=1&sort=<?= urlencode($sort) ?>&order=<?= urlencode(strtolower($order_upper)) ?>&per_page=<?= $per_page ?>" class="reset-btn" onclick="showLoading()">✕ Сбросить</a>
+                <a href="?<?= $is_filtered_by_context && !empty($filter_task_uuid) ? 'task=' . urlencode($filter_task_uuid) . '&' : '' ?><?= $is_filtered_by_context && !empty($filter_message_uuid) ? 'message=' . urlencode($filter_message_uuid) . '&' : '' ?>page=1&sort=<?= urlencode($sort) ?>&order=<?= urlencode(strtolower($order_upper)) ?>&per_page=<?= $per_page ?><?= $show_preview ? '&show_preview=1' : '' ?>" class="reset-btn" onclick="showLoading()">✕ Сбросить</a>
                 <?php endif; ?>
             </div>
         </form>
@@ -1141,6 +1285,12 @@ function build_where_condition($mime_like, $extension_filter, $search) {
                 <option value="100" <?= $per_page == 100 ? 'selected' : '' ?>>100</option>
             </select>
         </div>
+        <!-- ========== ЧЕКБОКС "ИКОНКИ/ПРЕВЬЮ" ========== -->
+        <label class="preview-checkbox-label">
+            <input type="checkbox" id="showPreviewCheckbox" <?= $show_preview ? 'checked' : '' ?> onchange="togglePreviewMode()">
+            <span>🎨 Показывать превью изображений</span>
+        </label>
+        <!-- ========== КОНЕЦ ЧЕКБОКСА ========== -->
     </div>
     
     <div class="sort-bar">
@@ -1178,7 +1328,29 @@ function build_where_condition($mime_like, $extension_filter, $search) {
                 <tbody>
                     <?php foreach ($files as $file): ?>
                     <tr>
-                        <td class="file-preview"><?= get_file_icon($file['mime'], $file['orig_name']) ?></td>
+                        <?php
+                        $is_image = is_image_file($file);
+                        $file_uuid_enc = htmlspecialchars($file['uuid']);
+                        $orig_name_enc = htmlspecialchars($file['orig_name']);
+                        $file_size_int = (int)$file['size_bytes'];
+                        $file_mime_enc = addslashes($file['mime']);
+                        ?>
+                        <td class="file-preview">
+                            <?php if ($show_preview && $is_image): ?>
+                                <a href="#" onclick="showFilePreview('<?= $file_uuid_enc ?>', '<?= addslashes($file['orig_name']) ?>', <?= $file_size_int ?>, '<?= $file_mime_enc ?>'); return false;" style="display: inline-block; text-decoration: none;">
+                                    <img class="file-preview-img"
+                                         src="<?= $appBase ?>/file_preview.php?uuid=<?= urlencode($file_uuid_enc) ?>&thumb=1&size=<?= (int)$preview_size ?>"
+                                         alt="<?= $orig_name_enc ?>"
+                                         loading="lazy"
+                                         onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22<?= (int)$preview_size ?>%22%20height%3D%22<?= (int)$preview_size ?>%22%20viewBox%3D%220%200%20100%20100%22%3E%3Crect%20width%3D%22100%22%20height%3D%22100%22%20fill%3D%22%23121a33%22%2F%3E%3Ctext%20x%3D%2250%22%20y%3D%2270%22%20font-size%3D%2248%22%20text-anchor%3D%22middle%22%20fill%3D%22%23e9eefc%22%3E%F0%9F%96%BC%EF%B8%8F%3C%2Ftext%3E%3C%2Fsvg%3E';">
+                                </a>
+                            <?php else: ?>
+                                <div class="file-preview-placeholder" style="width: <?= (int)$preview_size ?>px; height: <?= (int)$preview_size ?>px;">
+                                    <?= get_file_icon($file['mime'], $file['orig_name']) ?>
+                                </div>
+                            <?php endif; ?>
+                        </td>
+
                         <td class="file-name">
                             <a href="#" onclick="showFilePreview('<?= htmlspecialchars($file['uuid']) ?>', '<?= addslashes($file['orig_name']) ?>', <?= (int)$file['size_bytes'] ?>, '<?= addslashes($file['mime']) ?>'); return false;">
                                 <?= htmlspecialchars($file['orig_name']) ?>
@@ -1246,6 +1418,7 @@ function build_where_condition($mime_like, $extension_filter, $search) {
         if ($filter_type !== 'all' && !$is_filtered_by_context) $query_params['type'] = $filter_type;
         if ($is_filtered_by_context && !empty($filter_task_uuid)) $query_params['task'] = $filter_task_uuid;
         if ($is_filtered_by_context && !empty($filter_message_uuid)) $query_params['message'] = $filter_message_uuid;
+        if ($show_preview) $query_params['show_preview'] = '1'; // ========== ДОБАВЛЕНО для превью ==========
         
         $base_url = '?' . http_build_query($query_params);
         
