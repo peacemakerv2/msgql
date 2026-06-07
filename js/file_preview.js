@@ -69,7 +69,8 @@ function createModal() {
                     <button id="zoomOutBtn" class="zoom-btn" style="width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.1); border: none; color: white; font-size: 18px; cursor: pointer;">−</button>
                     <span id="zoomLevel" style="font-size: 13px; padding: 0 12px; color: rgba(233,238,252,0.8); min-width: 45px; text-align: center;">100%</span>
                     <button id="zoomInBtn" class="zoom-btn" style="width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.1); border: none; color: white; font-size: 18px; cursor: pointer;">+</button>
-                    <button id="resetZoomBtn" class="zoom-btn" style="width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.1); border: none; color: white; font-size: 14px; cursor: pointer;">⟳</button>
+                    <button id="resetZoomBtn" class="zoom-btn" style="width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.1); border: none; color: white; font-size: 14px; cursor: pointer;">✓</button>
+                    <button id="rotateBtn" class="zoom-btn" style="width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.1); border: none; color: white; font-size: 16px; cursor: pointer;">⟳</button>
                 </div>
             </div>
         </div>
@@ -87,7 +88,7 @@ function createModal() {
     return modal;
 }
 
-let currentZoom = 1, panX = 0, panY = 0, isDragging = false, startX, startY, currentContainer = null;
+let currentZoom = 1, panX = 0, panY = 0, currentRotation = 0, isDragging = false, startX, startY, currentContainer = null;
 
 function updateImageTransform(img) {
     if (!img) return;
@@ -102,25 +103,35 @@ function setupImageZoom(img, container) {
     currentZoom = 1;
     panX = 0;
     panY = 0;
+    currentRotation = 0;  // ========== ДОБАВЛЕНО для поворота ==========
     
     const zoomInBtn = document.getElementById('zoomInBtn');
     const zoomOutBtn = document.getElementById('zoomOutBtn');
     const resetZoomBtn = document.getElementById('resetZoomBtn');
+    const rotateBtn = document.getElementById('rotateBtn');  // ========== ДОБАВЛЕНО ==========
     const zoomControls = document.getElementById('zoomControls');
     
     if (zoomControls) zoomControls.style.display = 'flex';
     
+    // ========== ФУНКЦИЯ ОБНОВЛЕНИЯ ТРАНСФОРМАЦИИ (с учётом поворота) ==========
+    function updateImageTransformWithRotation() {
+        if (!img) return;
+        img.style.transform = `translate(${panX}px, ${panY}px) scale(${currentZoom}) rotate(${currentRotation}deg)`;
+        const zoomLevelSpan = document.getElementById('zoomLevel');
+        if (zoomLevelSpan) zoomLevelSpan.innerText = Math.round(currentZoom * 100) + '%';
+    }
+    
     function zoomIn() {
         if (currentZoom < MAX_ZOOM) {
             currentZoom = Math.min(MAX_ZOOM, currentZoom + ZOOM_STEP);
-            updateImageTransform(img);
+            updateImageTransformWithRotation();
         }
     }
     
     function zoomOut() {
         if (currentZoom > MIN_ZOOM) {
             currentZoom = Math.max(MIN_ZOOM, currentZoom - ZOOM_STEP);
-            updateImageTransform(img);
+            updateImageTransformWithRotation();
         }
     }
     
@@ -128,12 +139,21 @@ function setupImageZoom(img, container) {
         currentZoom = 1;
         panX = 0;
         panY = 0;
-        updateImageTransform(img);
+        currentRotation = 0;  // ========== СБРАСЫВАЕМ ПОВОРОТ ==========
+        updateImageTransformWithRotation();
+    }
+    
+    // ========== ФУНКЦИЯ ПОВОРОТА ПО ЧАСОВОЙ СТРЕЛКЕ ==========
+    function rotateImage() {
+        currentRotation = (currentRotation + 90) % 360;
+        updateImageTransformWithRotation();
+        safeLog('[file_preview] Image rotated to:', currentRotation + 'deg');
     }
     
     if (zoomInBtn) zoomInBtn.onclick = zoomIn;
     if (zoomOutBtn) zoomOutBtn.onclick = zoomOut;
     if (resetZoomBtn) resetZoomBtn.onclick = resetZoom;
+    if (rotateBtn) rotateBtn.onclick = rotateImage;  // ========== ДОБАВЛЕНО ==========
     
     container.style.cursor = 'grab';
     
@@ -151,7 +171,7 @@ function setupImageZoom(img, container) {
         if (isDragging) {
             panX = e.clientX - startX;
             panY = e.clientY - startY;
-            updateImageTransform(img);
+            updateImageTransformWithRotation();
         }
     }
     
@@ -186,7 +206,7 @@ function setupImageZoom(img, container) {
                 panX = panX * scaleChange + (percentX - 0.5) * rect.width * (scaleChange - 1);
                 panY = panY * scaleChange + (percentY - 0.5) * rect.height * (scaleChange - 1);
             }
-            updateImageTransform(img);
+            updateImageTransformWithRotation();
         }
     }
     
@@ -221,7 +241,7 @@ function setupImageZoom(img, container) {
         if (touches.length === 1 && isDragging && currentZoom > 1) {
             panX = touches[0].clientX - touchStartX;
             panY = touches[0].clientY - touchStartY;
-            updateImageTransform(img);
+            updateImageTransformWithRotation();
         } else if (touches.length === 2 && initialDistance > 0) {
             const newDistance = getTouchDistance(touches);
             const scale = newDistance / initialDistance;
@@ -229,7 +249,7 @@ function setupImageZoom(img, container) {
             newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
             if (newZoom !== currentZoom) {
                 currentZoom = newZoom;
-                updateImageTransform(img);
+                updateImageTransformWithRotation();
             }
         }
     }
@@ -242,7 +262,8 @@ function setupImageZoom(img, container) {
             currentZoom = 1;
             panX = 0;
             panY = 0;
-            updateImageTransform(img);
+            currentRotation = 0;  // ========== СБРАСЫВАЕМ ПОВОРОТ ПРИ СБРОСЕ ==========
+            updateImageTransformWithRotation();
         }
     }
     
