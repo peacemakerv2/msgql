@@ -54,7 +54,6 @@ function msgql_now_ms() {
 }
 
 
-
 function msgql_get_base_url() {
     static $base_url = null;
 
@@ -65,24 +64,36 @@ function msgql_get_base_url() {
     // Приоритет 1: глобальная константа
     if (defined('BASE_URL')) {
         $base_url = BASE_URL;
-        return $base_url;
     }
-
     // Приоритет 2: переменная окружения (удобно для cron)
-    if (isset($_ENV['BASE_URL']) && !empty($_ENV['BASE_URL'])) {
+    elseif (isset($_ENV['BASE_URL']) && !empty($_ENV['BASE_URL'])) {
         $base_url = $_ENV['BASE_URL'];
-        return $base_url;
     }
-
     // Приоритет 3: глобальная переменная
-    if (isset($GLOBALS['base_url'])) {
+    elseif (isset($GLOBALS['base_url'])) {
         $base_url = $GLOBALS['base_url'];
-        return $base_url;
+    }
+    // Значение по умолчанию для cron-скриптов
+    else {
+        $base_url = 'https://user183320.7ci.ru';
     }
 
-    // 🔥 ИСПРАВЛЕНИЕ: для cron-скриптов используем значение по умолчанию
-    // Убираем автоматическое определение через файловую структуру, так как оно неверное
-    $base_url = 'https://user183320.7ci.ru';
+    // Удаляем слэш в конце полностью (так как в других местах уже добавляют)
+    $base_url = rtrim($base_url, '/');
+    
+    // Проверка и исправление двойных слэшей (но сохраняем протокол https://)
+    // Разбиваем на протокол и остальную часть
+    $pattern = '#^(https?://)(.*)$#i';
+    if (preg_match($pattern, $base_url, $matches)) {
+        $protocol = $matches[1];
+        $rest = $matches[2];
+        // Заменяем множественные слэши на одинарные в остальной части
+        $rest = preg_replace('#/{2,}#', '/', $rest);
+        $base_url = $protocol . $rest;
+    } else {
+        // Если нет протокола, просто заменяем множественные слэши
+        $base_url = preg_replace('#/{2,}#', '/', $base_url);
+    }
 
     return $base_url;
 }
