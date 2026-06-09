@@ -1933,7 +1933,7 @@ body {
     font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
 }
 
-/* ==================== DESKTOP STYLES (как в версии 2.66) ==================== */
+/* ==================== DESKTOP STYLES v9.2 (FULL FIX) ==================== */
 @media (min-width: 769px) {
     /* Кнопка-гамбургер скрыта на десктопе */
     .mobile-drawer-toggle,
@@ -1942,10 +1942,36 @@ body {
         display: none !important;
     }
     
+    /* Правильная интеграция top-bar в flex-схему */
+    html, body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+    }
+    
+    body {
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .top-bar {
+        flex-shrink: 0;
+        position: relative;
+        z-index: 100;
+    }
+    
     .wrap {
+        flex: 1;
+        min-height: 0;
         max-width: 98%;
         margin: 0 auto;
         padding: 16px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-sizing: border-box;
+        width: 100%;
     }
     
     .messenger-container {
@@ -1954,8 +1980,9 @@ body {
         border-radius: 12px;
         overflow: hidden;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-        height: calc(100vh - 120px);
-        min-height: 500px;
+        flex: 1;
+        min-height: 0;
+        width: 100%;
     }
     
     .messenger-sidebar {
@@ -1966,19 +1993,31 @@ body {
         border-right: 1px solid #2c2c2c;
         overflow-y: auto;
         flex-shrink: 0;
+        height: 100%;
     }
     
     .messenger-chat {
-        flex: 1;
         display: flex;
         flex-direction: column;
-        background: #121212;
+        flex: 1;
         min-width: 0;
-        overflow: hidden;
+        height: 100%;
     }
     
     .messages-area {
-        padding-bottom: 300px;
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
+    }
+    
+    .message-input-area {
+        flex-shrink: 0;
+        background: #1e1e1e;
+        border-top: 1px solid #2c2c2c;
+        padding: 16px 20px;
+        margin-top: auto;
+        position: static;
+        bottom: auto;
     }
 }
 
@@ -3141,154 +3180,6 @@ a.file-item {
 }
 /* ==================== BLOCK END: File styles v2.24 ==================== */
 
-/* ==================== BLOCK START: Force scroll container fix v8.40 ==================== */
-/* ver.8.40 (2026-06-06) - ПОЛНОСТЬЮ ВОССТАНОВЛЕНА ПРОКРУТКА ИЗ СТАРОЙ ВЕРСИИ
- * - Принудительное обеспечение прокрутки для messages-area
- * - Фиксация всех flex-контейнеров для корректной работы скролла
- * - Специальные стили для мобильных устройств
- */
-
-/* Основной контейнер чата - должен занимать всю высоту и скрывать переполнение */
-.messenger-container {
-    height: 100% !important;
-    display: flex !important;
-    overflow: hidden !important;
-}
-
-/* Область чата - flex-колонка для правильного распределения высоты */
-.messenger-chat {
-    display: flex !important;
-    flex-direction: column !important;
-    height: 100% !important;
-    min-height: 0 !important;
-    overflow: hidden !important;
-    flex: 1 !important;
-}
-
-/* Область сообщений - ГЛАВНЫЙ КОНТЕЙНЕР СКРОЛЛА */
-#messages-area {
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    height: auto !important;
-    flex: 1 1 auto !important;
-    min-height: 0 !important;
-    display: block !important;
-    -webkit-overflow-scrolling: touch !important;
-    background: #121212 !important;
-}
-
-/* Хедер чата - не должен сжиматься */
-.chat-header {
-    flex-shrink: 0 !important;
-    position: relative !important;
-}
-
-/* Панель ввода - не должна сжиматься */
-.message-input-area {
-    flex-shrink: 0 !important;
-}
-
-/* Обёртка всей страницы */
-.wrap {
-    height: 100% !important;
-    max-width: 100% !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    overflow: hidden !important;
-}
-
-/* Для HTML и BODY */
-html, body {
-    height: 100% !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    overflow: hidden !important;
-}
-
-/* ==================== МОБИЛЬНЫЕ УСТРОЙСТВА ==================== */
-@media (max-width: 768px) {
-    html, body {
-        height: 100% !important;
-        overflow: hidden !important;
-        position: fixed !important;
-        width: 100% !important;
-    }
-    
-    .wrap {
-        height: 100dvh !important;
-        overflow: hidden !important;
-    }
-    
-    .messenger-container {
-        height: 100% !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    
-    /* На мобильных мессенджер-чат занимает всё пространство */
-    .messenger-chat {
-        height: 100% !important;
-        min-height: 0 !important;
-    }
-    
-    /* Область сообщений на мобильных - с отступом для панели ввода */
-    #messages-area {
-        flex: 1 !important;
-        min-height: 0 !important;
-        padding-bottom: 180px !important;
-    }
-    
-    /* Хедер на мобильных - прилипает сверху */
-    .chat-header {
-        position: sticky !important;
-        top: 0 !important;
-        z-index: 10 !important;
-        padding-top: 60px !important;
-    }
-    
-    /* Панель ввода фиксирована внизу */
-    .message-input-area {
-        position: fixed !important;
-        bottom: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        z-index: 100 !important;
-        background: #1e1e1e !important;
-        padding-bottom: env(safe-area-inset-bottom, 10px) !important;
-    }
-}
-
-/* ==================== ДЕСКТОПНЫЕ УСТРОЙСТВА ==================== */
-@media (min-width: 769px) {
-    .wrap {
-        max-width: 98% !important;
-        margin: 0 auto !important;
-        padding: 16px !important;
-        height: calc(100vh - 20px) !important;
-    }
-    
-    .messenger-container {
-        height: 100% !important;
-        border-radius: 12px !important;
-    }
-    
-    #messages-area {
-        padding-bottom: 300px !important;
-    }
-}
-
-/* Диагностический класс - показывает проблему с контейнером */
-#messages-area.diagnostic-mode {
-    outline: 2px solid red !important;
-    min-height: 200px !important;
-    height: 200px !important;
-}
-
-/* Дополнительная защита от переполнения */
-* {
-    box-sizing: border-box;
-}
-/* ==================== BLOCK END: Force scroll container fix v8.40 ==================== */
 
 /* ==================== BLOCK START: Mobile drawer button fix v8.41 ==================== */
 /* ver.8.41 (2026-06-06) - ФИКСАЦИЯ КНОПКИ-ГАМБУРГЕРА НА МОБИЛЬНЫХ
@@ -3575,6 +3466,8 @@ body > .mobile-drawer-toggle {
     }
 }
 /* ==================== BLOCK END: Edit Message Modal Styles v8.32 ==================== */
+
+
 </style>
 </head>
 <body>
@@ -3663,6 +3556,32 @@ function updateUnreadBadge() {
     return unreadMessages;
 }
 // ==================== BLOCK END: Global variables and CSRF functions v8.23 ====================
+
+
+
+
+// ==================== BLOCK START: Desktop scroll diagnostics v8.54 (DISABLED ON TASK PAGE) ====================
+// ver.8.54 (2026-06-10) - ОТКЛЮЧАЕМ ДИАГНОСТИКУ НА СТРАНИЦАХ С PARAMETER task
+// - Диагностика вызывала "подпрыгивание" страницы на десктопе
+// - Оставляем только для страниц без параметра task
+
+// Запускаем диагностику ТОЛЬКО для страниц БЕЗ параметра task
+// (чтобы не вызывать подпрыгивание)
+var urlParamsForDiagnostics = new URLSearchParams(window.location.search);
+var hasTaskParam = urlParamsForDiagnostics.has('task');
+
+if (!hasTaskParam && window.innerWidth > 768) {
+    setTimeout(function() {
+        if (typeof desktopScrollDiagnostics !== 'undefined' && desktopScrollDiagnostics.init) {
+            desktopScrollDiagnostics.init();
+            logDebug('[SCROLL_DIAG] Started for desktop page WITHOUT task parameter');
+        }
+    }, 100);
+} else {
+    logDebug('[SCROLL_DIAG] Skipped diagnostics (hasTaskParam=' + hasTaskParam + ')');
+}
+// ==================== BLOCK END: Desktop scroll diagnostics v8.54 ====================
+
 
 // ==================== BLOCK START: Sequential request queue v7.14 ====================
 window._requestQueue = [];
@@ -4132,17 +4051,17 @@ function renderMessage(msg) {
 
 
 
-// ==================== BLOCK START: Add spacer to last message v8.20 (STATIC CSS BOTTOM PADDING) ====================
-// ver.8.20: УДАЛЁН ДИНАМИЧЕСКИЙ СПЕЙСЕР (бесконечный цикл)
-// - Вместо dynamic spacer используется статический CSS отступ
-// - На мобильных устройствах добавляется padding-bottom к messages-area
-// - На десктопе отступ 200px уже есть в CSS
+// ==================== BLOCK START: Add spacer to last message v8.51 (INNER CONTAINER) ====================
+// ver.8.51: Используем внутренний контейнер для спейсера
 
-// Функция для применения статического отступа на мобильных устройствах
 function applyStaticMobileSpacer() {
     if (window.innerWidth > 768) return;
     
-    var container = document.getElementById('messages-area');
+    // v8.51: Используем внутренний контейнер
+    var container = document.getElementById('messages-area-inner');
+    if (!container) {
+        container = document.getElementById('messages-area');
+    }
     if (!container) return;
     
     // Удаляем все существующие динамические спейсеры, если они есть
@@ -4151,8 +4070,6 @@ function applyStaticMobileSpacer() {
         existingSpacers[i].remove();
     }
     
-    // Удаляем псевдоэлемент::after из стилей (он может мешать)
-    // Просто убеждаемся, что padding-bottom установлен правильно
     var currentPadding = window.getComputedStyle(container).paddingBottom;
     var targetPadding = '300px';
     
@@ -4161,6 +4078,26 @@ function applyStaticMobileSpacer() {
         logDebug('[SPACER] Applied static padding-bottom: ' + targetPadding);
     }
 }
+
+function setupStaticSpacer() {
+    applyStaticMobileSpacer();
+    window.addEventListener('resize', function() {
+        setTimeout(applyStaticMobileSpacer, 100);
+    });
+    setTimeout(applyStaticMobileSpacer, 500);
+    setTimeout(applyStaticMobileSpacer, 1500);
+    setTimeout(applyStaticMobileSpacer, 3000);
+    logDebug('[SPACER] Static spacer setup complete (dynamic spacer disabled)');
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupStaticSpacer);
+} else {
+    setupStaticSpacer();
+}
+// ==================== BLOCK END: Add spacer to last message v8.51 ====================
+
+
 
 // Настройка статического отступа (без MutationObserver)
 function setupStaticSpacer() {
@@ -4460,9 +4397,17 @@ function loadMessagesPage(page, options) {
     xhr.send(formData);
 }
 
-// ==================== BLOCK START: renderWindowPages scroll fix v8.44 (SINGLE SCROLL ONLY) ====================
+// ==================== BLOCK START: renderWindowPages scroll fix v8.54 (DESKTOP PROTECTION) ====================
+// ver.8.54 (2026-06-10) - ДОБАВЛЕНА ЗАЩИТА ОТ СКРОЛЛА WINDOW НА ДЕСКТОПЕ
+// - На десктопе НЕ блокируем body (это вызывало прыжки)
+// - Восстанавливаем скролл только для контейнера
+
 function renderWindowPages(options) {
-    var container = document.getElementById('messages-area');
+    var container = document.getElementById('messages-area-inner');
+    if (!container) {
+        container = document.getElementById('messages-area');
+        logDebug('[RENDER_WINDOW_v8.54] Using fallback container: messages-area');
+    }
     if (!container) {
         logDebug('[RENDER_WINDOW] Container not found!');
         if (typeof window.setPageLoadStatus === 'function') {
@@ -4470,23 +4415,50 @@ function renderWindowPages(options) {
         }
         return;
     }
-    
+
     var scrollToBottom = options.scrollToBottom || false;
     var preserveScroll = options.preserveScroll || false;
     var oldScrollTop = options.oldScrollTop || 0;
     var targetPage = options.targetPage || 0;
     var isLastPage = options.isLastPage || false;
-    
-    logDebug('[RENDER_WINDOW] Starting render. targetPage=' + targetPage + ', scrollToBottom=' + scrollToBottom + 
-             ', preserveScroll=' + preserveScroll + ', oldScrollTop=' + oldScrollTop);
-    
+
+    logDebug('[RENDER_WINDOW_v8.54] ========== START ==========');
+    logDebug('[RENDER_WINDOW_v8.54] scrollToBottom=' + scrollToBottom +
+        ', preserveScroll=' + preserveScroll +
+        ', oldScrollTop=' + oldScrollTop +
+        ', isLastPage=' + isLastPage);
+    logDebug('[RENDER_WINDOW_v8.54] BEFORE RENDER - window.scrollY=' + window.scrollY +
+        ', container.scrollTop=' + container.scrollTop +
+        ', container.scrollHeight=' + container.scrollHeight);
+
+    // v8.54: НА ДЕСКТОПЕ НЕ БЛОКИРУЕМ body (это вызывало прыжки)
+    var isDesktop = window.innerWidth > 768;
+    var body = document.body;
+    var html = document.documentElement;
+    var originalBodyOverflow = null;
+    var originalHtmlOverflow = null;
+
+    if (!isDesktop) {
+        // Только на мобильных блокируем body
+        originalBodyOverflow = body.style.overflow;
+        originalHtmlOverflow = html.style.overflow;
+        body.style.overflow = 'hidden';
+        html.style.overflow = 'hidden';
+        logDebug('[RENDER_WINDOW_v8.54] Body scroll locked (mobile only)');
+    } else {
+        logDebug('[RENDER_WINDOW_v8.54] Desktop mode - body scroll NOT locked');
+        // На десктопе принудительно сбрасываем скролл окна
+        if (window.scrollY !== 0) {
+            window.scrollTo(0, 0);
+            logDebug('[RENDER_WINDOW_v8.54] Reset window scroll to 0');
+        }
+    }
+
     var allMessages = [];
     var pageOrder = [];
-    
     if (window.pagination.pageCache) {
         var pageNumbers = Object.keys(window.pagination.pageCache).map(Number);
         pageNumbers.sort(function(a, b) { return a - b; });
-        
         for (var i = 0; i < pageNumbers.length; i++) {
             var pageNum = pageNumbers[i];
             var pageData = window.pagination.pageCache[pageNum];
@@ -4497,86 +4469,144 @@ function renderWindowPages(options) {
                 }
             }
         }
-        
-        logDebug('[RENDER_WINDOW] Collected ' + allMessages.length + ' messages from pages: ' + pageOrder.join(', '));
+        logDebug('[RENDER_WINDOW_v8.54] Collected ' + allMessages.length + ' messages from pages: ' + pageOrder.join(', '));
     }
-    
+
     if (allMessages.length === 0) {
-        logDebug('[RENDER_WINDOW] No messages to render');
+        logDebug('[RENDER_WINDOW_v8.54] No messages to render');
         container.innerHTML = '<div class="empty-state">💬 Нет сообщений. Напишите первое!</div>';
+        if (!isDesktop && originalBodyOverflow !== null) {
+            body.style.overflow = originalBodyOverflow;
+            html.style.overflow = originalHtmlOverflow;
+        }
         if (typeof window.setPageLoadStatus === 'function') {
             window.setPageLoadStatus('ready', '✓ Нет сообщений', false);
         }
         return;
     }
-    
-    var anchorMessageUuid = null;
-    var existingMessagesBefore = container.querySelectorAll('.message');
-    
-    if (preserveScroll && existingMessagesBefore.length > 0 && targetPage !== undefined) {
-        var targetPageData = window.pagination.pageCache[targetPage];
-        if (targetPageData && targetPageData.messages && targetPageData.messages.length > 0) {
-            var firstMsgOfTargetPage = targetPageData.messages[0];
-            anchorMessageUuid = firstMsgOfTargetPage.uuid;
-            logDebug('[RENDER_WINDOW] Using anchor message from target page: ' + anchorMessageUuid);
-        }
+
+    var oldScrollHeight = container.scrollHeight;
+    var wasAtBottom = false;
+    if (container.scrollHeight > 0 && container.scrollTop + container.clientHeight >= container.scrollHeight - 50) {
+        wasAtBottom = true;
+        logDebug('[RENDER_WINDOW_v8.54] User was at bottom before render');
     }
-    
+
+    var topVisibleElement = null;
+    var topVisibleOffset = 0;
+    if (preserveScroll && oldScrollTop === 0 && container.children.length > 0) {
+        var viewportTop = container.scrollTop;
+        for (var i = 0; i < container.children.length; i++) {
+            var child = container.children[i];
+            var childTop = child.offsetTop;
+            if (childTop >= viewportTop) {
+                topVisibleElement = child;
+                topVisibleOffset = childTop - viewportTop;
+                break;
+            }
+        }
+        logDebug('[RENDER_WINDOW_v8.54] Found top visible element for restore');
+    }
+
     container.innerHTML = '';
-    
     for (var i = 0; i < allMessages.length; i++) {
         var msg = allMessages[i];
         container.insertAdjacentHTML('beforeend', renderMessage(msg));
     }
-    
-    logDebug('[RENDER_WINDOW] Rendered ' + allMessages.length + ' messages');
-    
+    logDebug('[RENDER_WINDOW_v8.54] Rendered ' + allMessages.length + ' messages');
+
     void container.offsetHeight;
-    
+
     if (allMessages.length > 0) {
         var maxTime = allMessages[allMessages.length - 1].time || 0;
         if (maxTime > window.lastMessageTime) {
             window.lastMessageTime = maxTime;
         }
     }
-    
+
     if (typeof window.setPageLoadStatus === 'function') {
         window.setPageLoadStatus('ready', '✓ Готово', false);
     }
-    
-    // ========== ТОЛЬКО ОДНА ПОПЫТКА ПРОКРУТКИ (без множественных таймеров) ==========
-    if (scrollToBottom || isLastPage) {
-        // ЕДИНСТВЕННАЯ прокрутка через 1.5 секунды (достаточно для загрузки изображений)
+
+    var newScrollHeight = container.scrollHeight;
+
+    function restoreBodyScroll() {
+        if (!isDesktop && originalBodyOverflow !== null) {
+            body.style.overflow = originalBodyOverflow;
+            html.style.overflow = originalHtmlOverflow;
+            logDebug('[RENDER_WINDOW_v8.54] Body scroll restored');
+        }
+    }
+
+    function safeScrollToBottom() {
+        if (!container) return;
+        logDebug('[RENDER_WINDOW_v8.54] 📍 BEFORE SCROLL - window.scrollY=' + window.scrollY +
+            ', container.scrollTop=' + container.scrollTop);
+        container.scrollTop = container.scrollHeight;
         setTimeout(function() {
-            if (container && !window.userIsScrolling) {
-                container.scrollTop = container.scrollHeight;
-                logDebug('[RENDER_WINDOW] Single scroll to bottom after 1500ms: scrollTop=' + container.scrollTop);
+            logDebug('[RENDER_WINDOW_v8.54] 📍 AFTER SCROLL - window.scrollY=' + window.scrollY +
+                ', container.scrollTop=' + container.scrollTop);
+            if (!isDesktop && window.scrollY !== 0) {
+                logDebug('[RENDER_WINDOW_v8.54] ⚠️ window.scrollY changed on mobile, resetting');
+                window.scrollTo(0, 0);
             }
-        }, 1500);
-    } else if (preserveScroll && anchorMessageUuid) {
+        }, 50);
+        restoreBodyScroll();
+    }
+
+    function safeRestoreScroll(targetScrollTop) {
+        if (!container) return;
+        logDebug('[RENDER_WINDOW_v8.54] 📍 BEFORE RESTORE - window.scrollY=' + window.scrollY +
+            ', setting container.scrollTop=' + targetScrollTop);
+        container.scrollTop = targetScrollTop;
         setTimeout(function() {
-            var anchorElement = document.getElementById('msg-' + anchorMessageUuid);
-            if (anchorElement) {
-                anchorElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                logDebug('[RENDER_WINDOW] Restored scroll to anchor: ' + anchorMessageUuid);
-            } else if (oldScrollTop > 0) {
-                container.scrollTop = oldScrollTop;
-                logDebug('[RENDER_WINDOW] Restored scroll to oldScrollTop: ' + oldScrollTop);
+            logDebug('[RENDER_WINDOW_v8.54] 📍 AFTER RESTORE - window.scrollY=' + window.scrollY);
+            if (!isDesktop && window.scrollY !== 0) {
+                window.scrollTo(0, 0);
             }
+        }, 50);
+        restoreBodyScroll();
+    }
+
+    if (scrollToBottom || isLastPage || wasAtBottom) {
+        setTimeout(function() {
+            safeScrollToBottom();
         }, 100);
     } else if (preserveScroll && oldScrollTop > 0) {
         setTimeout(function() {
-            container.scrollTop = oldScrollTop;
-            logDebug('[RENDER_WINDOW] Restored scroll to oldScrollTop: ' + oldScrollTop);
+            var targetScrollTop = oldScrollTop;
+            if (newScrollHeight > oldScrollHeight) {
+                targetScrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
+            }
+            targetScrollTop = Math.min(targetScrollTop, container.scrollHeight - container.clientHeight);
+            safeRestoreScroll(targetScrollTop);
         }, 100);
+    } else if (preserveScroll && topVisibleElement) {
+        setTimeout(function() {
+            if (container && topVisibleElement && topVisibleElement.parentNode === container) {
+                var newTop = topVisibleElement.offsetTop - topVisibleOffset;
+                newTop = Math.max(0, Math.min(newTop, container.scrollHeight - container.clientHeight));
+                safeRestoreScroll(newTop);
+            } else {
+                restoreBodyScroll();
+            }
+        }, 100);
+    } else {
+        restoreBodyScroll();
     }
-    
+
+    if (typeof desktopScrollDiagnostics !== 'undefined' && desktopScrollDiagnostics.enabled) {
+        logDebug('[RENDER_WINDOW_v8.54] Stopping desktop diagnostics');
+        desktopScrollDiagnostics.stop();
+    }
+
     setTimeout(function() {
         loadLazyPreviews();
         markVisibleMessagesAsRead();
-    }, 300);
+    }, 200);
+    logDebug('[RENDER_WINDOW_v8.54] ========== END ==========');
 }
-// ==================== BLOCK END: renderWindowPages scroll fix v8.44 ====================
+// ==================== BLOCK END: renderWindowPages scroll fix v8.54 ====================
 
 
 // ==================== BLOCK START: Container scroll diagnostics v1.0 ====================
@@ -4633,8 +4663,13 @@ function processPendingLoad() {
     }
 }
 
+// ==================== BLOCK START: markVisibleMessagesAsRead v8.51 (INNER CONTAINER) ====================
 function markVisibleMessagesAsRead() {
-    var container = document.getElementById('messages-area');
+    // v8.51: Используем внутренний контейнер
+    var container = document.getElementById('messages-area-inner');
+    if (!container) {
+        container = document.getElementById('messages-area');
+    }
     if (!container) return;
     
     var unreadMessages = container.querySelectorAll('.message.unread:not(.own)');
@@ -4650,6 +4685,7 @@ function markVisibleMessagesAsRead() {
         queueMarkMessagesRead(unreadUuids);
     }
 }
+// ==================== BLOCK END: markVisibleMessagesAsRead v8.51 ====================
 
 function queueMarkMessagesRead(messageUuids) {
     if (!messageUuids || messageUuids.length === 0) return;
@@ -4704,8 +4740,18 @@ function sendMarkReadRequest(uuidsToMark, retryCount) {
     xhr.send(formData);
 }
 
+// ==================== BLOCK START: onMessagesScroll v8.51 (INNER CONTAINER) ====================
+// ver.8.51: Используем внутренний контейнер для скролла
+
+var lastBottomLoadTime = 0;
+var BOTTOM_LOAD_COOLDOWN = 500;
+
 function onMessagesScroll() {
-    var container = document.getElementById('messages-area');
+    // v8.51: Используем внутренний контейнер
+    var container = document.getElementById('messages-area-inner');
+    if (!container) {
+        container = document.getElementById('messages-area');
+    }
     if (!container || window.pagination.isLoading) return;
     
     var scrollTop = container.scrollTop;
@@ -4768,10 +4814,10 @@ function onMessagesScroll() {
         }, 500);
     }
 }
+// ==================== BLOCK END: onMessagesScroll v8.51 ====================
 
-var lastBottomLoadTime = 0;
-var BOTTOM_LOAD_COOLDOWN = 500;
 
+// ==================== BLOCK START: loadOlderMessages v8.51 (INNER CONTAINER) ====================
 function loadOlderMessages() {
     logDebug('[PAGINATION_v8] loadOlderMessages called');
     
@@ -4789,8 +4835,12 @@ function loadOlderMessages() {
         return;
     }
     
-    var container = document.getElementById('messages-area');
-    var scrollPosition = container ? container.scrollTop : 0;
+    // v8.51: Используем внутренний контейнер
+    var scrollContainer = document.getElementById('messages-area-inner');
+    if (!scrollContainer) {
+        scrollContainer = document.getElementById('messages-area');
+    }
+    var scrollPosition = scrollContainer ? scrollContainer.scrollTop : 0;
     
     if (window.pagination.pageCache && window.pagination.pageCache[prevPage]) {
         logDebug('[PAGINATION_v8] Page ' + prevPage + ' already in cache, updating window');
@@ -4813,7 +4863,9 @@ function loadOlderMessages() {
         });
     }
 }
+// ==================== BLOCK END: loadOlderMessages v8.51 ====================
 
+// ==================== BLOCK START: loadNewerMessages v8.51 (INNER CONTAINER) ====================
 function loadNewerMessages() {
     logDebug('[PAGINATION_v8] loadNewerMessages called');
     
@@ -4856,6 +4908,8 @@ function loadNewerMessages() {
         });
     }
 }
+// ==================== BLOCK END: loadNewerMessages v8.51 ====================
+
 
 // ==================== BLOCK START: Sidebar refresh functions v8.37 ====================
 // ver.8.36 (2026-06-02) - ДИНАМИЧЕСКОЕ ОБНОВЛЕНИЕ САЙДБАРА
@@ -5193,23 +5247,45 @@ function selectTask(el) {
 
 
 
-// ==================== BLOCK START: scrollSidebarToActiveTask v2.3 (FIXED) ====================
-// ver.2.3 (2026-06-05) - ИСПРАВЛЕНА ПРОБЛЕМА: задача моргает и пропадает
-// - Функция теперь не просто ищет .task-item.active, а ищет задачу по UUID
-// - Добавлена принудительная активация задачи, если она не активна
-// - Обработка как для десктопного, так и для мобильного сайдбара
+// ==================== BLOCK START: scrollSidebarToActiveTask v2.4 (SCROLL ONLY SIDEBAR) ====================
+// ver.2.4 (2026-06-10) - ИСПРАВЛЕНИЕ: ПРОКРУЧИВАЕМ ТОЛЬКО САЙДБАР, НЕ ВСЮ СТРАНИЦУ
+// - Используем scrollTop для прокрутки сайдбара вместо scrollIntoView
+// - Предотвращаем прокрутку body и html
+// - Добавлена принудительная фиксация body во время прокрутки
 
 function scrollSidebarToActiveTask() {
     var currentUuid = window.currentTaskUuid;
     if (!currentUuid) {
-        logDebug('[SCROLL_SIDEBAR_v2.3] No currentTaskUuid, skipping');
+        logDebug('[SCROLL_SIDEBAR_v2.4] No currentTaskUuid, skipping');
         return;
     }
     
-    logDebug('[SCROLL_SIDEBAR_v2.3] Starting scroll to task UUID:', currentUuid);
+    logDebug('[SCROLL_SIDEBAR_v2.4] Starting scroll to task UUID:', currentUuid);
+    
+    // Функция для прокрутки к задаче в указанном контейнере (только внутри контейнера)
+    function scrollToTaskInContainer(container, taskElement, isMobile) {
+        if (!container || !taskElement) return false;
+        
+        // Получаем позицию задачи внутри контейнера
+        var containerRect = container.getBoundingClientRect();
+        var taskRect = taskElement.getBoundingClientRect();
+        
+        // Вычисляем относительную позицию задачи внутри контейнера
+        var relativeTop = taskRect.top - containerRect.top;
+        var targetScrollTop = container.scrollTop + relativeTop - (container.clientHeight / 2) + (taskRect.height / 2);
+        
+        // Прокручиваем ТОЛЬКО контейнер, не затрагивая body
+        container.scrollTo({
+            top: Math.max(0, targetScrollTop),
+            behavior: 'smooth'
+        });
+        
+        logDebug('[SCROLL_SIDEBAR_v2.4] Scrolled container (not page) to task in ' + (isMobile ? 'mobile' : 'desktop') + ' sidebar');
+        return true;
+    }
     
     // Функция для поиска и активации задачи по UUID в указанном контейнере
-    function activateAndScrollToTask(container, isMobile) {
+    function activateAndScrollToTaskInContainer(container, isMobile) {
         if (!container) return false;
         
         var taskElement = container.querySelector('.task-item[data-task-uuid="' + currentUuid + '"]');
@@ -5219,7 +5295,7 @@ function scrollSidebarToActiveTask() {
         var isActive = taskElement.classList.contains('active');
         
         if (!isActive) {
-            logDebug('[SCROLL_SIDEBAR_v2.3] Task found but not active, activating');
+            logDebug('[SCROLL_SIDEBAR_v2.4] Task found but not active, activating');
             
             // Снимаем active со всех задач в этом контейнере
             var allTasks = container.querySelectorAll('.task-item');
@@ -5229,56 +5305,81 @@ function scrollSidebarToActiveTask() {
             
             // Добавляем active нужной задаче
             taskElement.classList.add('active');
-            logDebug('[SCROLL_SIDEBAR_v2.3] Activated task in ' + (isMobile ? 'mobile' : 'desktop') + ' sidebar');
+            logDebug('[SCROLL_SIDEBAR_v2.4] Activated task in ' + (isMobile ? 'mobile' : 'desktop') + ' sidebar');
         }
         
-        // Прокручиваем к задаче
-        taskElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        logDebug('[SCROLL_SIDEBAR_v2.3] Scrolled to task in ' + (isMobile ? 'mobile' : 'desktop') + ' sidebar');
+        // Прокручиваем ТОЛЬКО контейнер (не страницу!)
+        scrollToTaskInContainer(container, taskElement, isMobile);
         
         return true;
     }
     
+    // Временно блокируем прокрутку страницы, чтобы она не дёргалась
+    var body = document.body;
+    var html = document.documentElement;
+    var originalBodyOverflow = body.style.overflow;
+    var originalHtmlOverflow = html.style.overflow;
+    body.style.overflow = 'hidden';
+    html.style.overflow = 'hidden';
+    
     // Множественные попытки с разными задержками (для надёжности)
     var scrollAttempts = [100, 300, 600, 1000, 2000];
+    var attemptCount = 0;
     
-    for (var a = 0; a < scrollAttempts.length; a++) {
-        (function(delay) {
-            setTimeout(function() {
-                // Проверяем, не изменилась ли задача за время ожидания
-                if (window.currentTaskUuid !== currentUuid) {
-                    logDebug('[SCROLL_SIDEBAR_v2.3] Task changed during wait, skipping attempt ' + delay);
-                    return;
-                }
-                
-                // Десктопный сайдбар
-                var desktopSidebar = document.querySelector('.messenger-sidebar');
-                if (desktopSidebar) {
-                    activateAndScrollToTask(desktopSidebar, false);
-                }
-                
-                // Мобильный сайдбар (если существует)
-                var mobileSidebar = document.getElementById('mobile-drawer-panel');
-                if (mobileSidebar && mobileSidebar.querySelector('.mobile-drawer-sidebar')) {
-                    var mobileTasksContainer = mobileSidebar.querySelector('.mobile-drawer-sidebar');
-                    activateAndScrollToTask(mobileTasksContainer, true);
-                }
-                
-                // Также пробуем найти в глобальном DOM (на случай, если сайдбар не в контейнере)
-                var anyTask = document.querySelector('.task-item[data-task-uuid="' + currentUuid + '"]');
-                if (anyTask && !anyTask.classList.contains('active')) {
-                    logDebug('[SCROLL_SIDEBAR_v2.3] Global fallback: activating task');
-                    document.querySelectorAll('.task-item').forEach(function(t) {
-                        t.classList.remove('active');
-                    });
-                    anyTask.classList.add('active');
-                    anyTask.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
-            }, delay);
-        })(scrollAttempts[a]);
+    function doScrollAttempt() {
+        if (attemptCount >= scrollAttempts.length) {
+            // Восстанавливаем прокрутку страницы после всех попыток
+            body.style.overflow = originalBodyOverflow;
+            html.style.overflow = originalHtmlOverflow;
+            logDebug('[SCROLL_SIDEBAR_v2.4] Restored page scroll');
+            return;
+        }
+        
+        var delay = scrollAttempts[attemptCount];
+        attemptCount++;
+        
+        setTimeout(function() {
+            // Проверяем, не изменилась ли задача за время ожидания
+            if (window.currentTaskUuid !== currentUuid) {
+                logDebug('[SCROLL_SIDEBAR_v2.4] Task changed during wait, stopping scroll attempts');
+                body.style.overflow = originalBodyOverflow;
+                html.style.overflow = originalHtmlOverflow;
+                return;
+            }
+            
+            logDebug('[SCROLL_SIDEBAR_v2.4] Scroll attempt ' + attemptCount + ' at ' + delay + 'ms');
+            
+            // Десктопный сайдбар
+            var desktopSidebar = document.querySelector('.messenger-sidebar');
+            if (desktopSidebar) {
+                activateAndScrollToTaskInContainer(desktopSidebar, false);
+            }
+            
+            // Мобильный сайдбар (если существует)
+            var mobileSidebar = document.getElementById('mobile-drawer-panel');
+            if (mobileSidebar && mobileSidebar.querySelector('.mobile-drawer-sidebar')) {
+                var mobileTasksContainer = mobileSidebar.querySelector('.mobile-drawer-sidebar');
+                activateAndScrollToTaskInContainer(mobileTasksContainer, true);
+            }
+            
+            // Также пробуем найти в глобальном DOM и активировать
+            var anyTask = document.querySelector('.task-item[data-task-uuid="' + currentUuid + '"]');
+            if (anyTask && !anyTask.classList.contains('active')) {
+                logDebug('[SCROLL_SIDEBAR_v2.4] Global fallback: activating task');
+                document.querySelectorAll('.task-item').forEach(function(t) {
+                    t.classList.remove('active');
+                });
+                anyTask.classList.add('active');
+            }
+            
+            // Следующая попытка
+            doScrollAttempt();
+        }, delay);
     }
+    
+    doScrollAttempt();
 }
-// ==================== BLOCK END: scrollSidebarToActiveTask v2.3 ====================
+// ==================== BLOCK END: scrollSidebarToActiveTask v2.4 ====================
 
 function initTaskSequential(taskUuid, callback) {
     if (!taskUuid) { if(callback) callback(); return; }
@@ -5357,15 +5458,19 @@ function loadTaskUsersSequential(taskUuid, callback) {
     });
 }
 
-// ==================== BLOCK START: loadTaskLastPageSequential v2.3 (SINGLE SCROLL) ====================
+// ==================== BLOCK START: loadTaskLastPageSequential v8.54 (NO EXTRA SCROLL ON DESKTOP) ====================
+// ver.8.54 (2026-06-10) - НЕ ДЕЛАЕМ ПРОКРУТКУ НА ДЕСКТОПЕ В ЭТОЙ ФУНКЦИИ
+// - Прокрутка выполняется только в renderWindowPages
+// - Убираем дублирующие scroll-вызовы
+
 function loadTaskLastPageSequential(taskUuid, callback, retryCount) {
     if (retryCount === undefined) retryCount = 0;
     var MAX_RETRIES = 3;
     
-    logDebug('[LAST_PAGE_v8] Loading last page for task: ' + taskUuid + ' (attempt ' + (retryCount + 1) + '/' + MAX_RETRIES + ')');
+    logDebug('[LAST_PAGE_v8.54] Loading last page for task: ' + taskUuid + ' (attempt ' + (retryCount + 1) + '/' + MAX_RETRIES + ')');
     
     if (!taskUuid || window.currentTaskUuid !== taskUuid) {
-        logDebug('[LAST_PAGE_v8] Task UUID mismatch or empty, aborting');
+        logDebug('[LAST_PAGE_v8.54] Task UUID mismatch or empty, aborting');
         if (typeof window.setPageLoadStatus === 'function') {
             window.setPageLoadStatus('error', '⚠️ Ошибка загрузки', false);
         }
@@ -5387,14 +5492,14 @@ function loadTaskLastPageSequential(taskUuid, callback, retryCount) {
     
     countXhr.onload = function() {
         if (window.currentTaskUuid !== taskUuid) {
-            logDebug('[LAST_PAGE_v8] Task changed during request, aborting');
+            logDebug('[LAST_PAGE_v8.54] Task changed during request, aborting');
             if (callback) callback();
             return;
         }
         
         if (countXhr.status === 503 && retryCount < MAX_RETRIES) {
             var delay = Math.min(30000, 1000 * Math.pow(2, retryCount));
-            logDebug('[LAST_PAGE_v8] Got 503, retrying in ' + delay + 'ms');
+            logDebug('[LAST_PAGE_v8.54] Got 503, retrying in ' + delay + 'ms');
             setTimeout(function() {
                 loadTaskLastPageSequential(taskUuid, callback, retryCount + 1);
             }, delay);
@@ -5404,13 +5509,13 @@ function loadTaskLastPageSequential(taskUuid, callback, retryCount) {
         if (countXhr.status === 200) {
             try {
                 var data = JSON.parse(countXhr.responseText);
-                logDebug('[LAST_PAGE_v8] Response:', data);
+                logDebug('[LAST_PAGE_v8.54] Response:', data);
                 
                 if (data.success && data.total_pages !== undefined) {
                     var lastPage = Math.max(0, data.total_pages - 1);
                     var totalMessages = data.total_count || 0;
                     
-                    logDebug('[LAST_PAGE_v8] Total pages: ' + data.total_pages + ', total messages: ' + totalMessages + ', loading last page: ' + lastPage);
+                    logDebug('[LAST_PAGE_v8.54] Total pages: ' + data.total_pages + ', total messages: ' + totalMessages + ', loading last page: ' + lastPage);
                     
                     if (!window.pagination.pageCache) {
                         window.pagination.pageCache = {};
@@ -5420,80 +5525,85 @@ function loadTaskLastPageSequential(taskUuid, callback, retryCount) {
                     window.pagination.totalMessages = totalMessages;
                     window.pagination.initializing = false;
                     
-                    // scrollToBottom=true - прокрутка будет выполнена в renderWindowPages
+                    // v8.54: НА ДЕСКТОПЕ НЕ ДЕЛАЕМ scrollToBottom ЗДЕСЬ
+                    // scrollToBottom будет передан в renderWindowPages
+                    var isDesktop = window.innerWidth > 768;
+                    
+                    logDebug('[LAST_PAGE_v8.54] isDesktop=' + isDesktop + ', scrollToBottom=' + !isDesktop);
+                    
                     loadMessagesPage(lastPage, { 
-                        scrollToBottom: true, 
+                        scrollToBottom: !isDesktop,
                         isLastPage: true,
                         bufferSize: 1,
                         callback: function(result) {
-                            logDebug('[LAST_PAGE_v8] Page loaded, scroll will be handled by renderWindowPages');
+                            logDebug('[LAST_PAGE_v8.54] Page loaded');
                             if (callback) callback(result);
                         }
                     });
                 } else {
-                    logDebug('[LAST_PAGE_v8] No messages or invalid response, loading page 0');
-                    loadMessagesPage(0, { scrollToBottom: true, callback: callback, bufferSize: 1 });
+                    logDebug('[LAST_PAGE_v8.54] No messages or invalid response, loading page 0');
+                    loadMessagesPage(0, { scrollToBottom: false, callback: callback, bufferSize: 1 });
                 }
             } catch(e) {
-                logDebug('[LAST_PAGE_v8] JSON parse error: ' + e.message);
-                loadMessagesPage(0, { scrollToBottom: true, callback: callback, bufferSize: 1 });
+                logDebug('[LAST_PAGE_v8.54] JSON parse error: ' + e.message);
+                loadMessagesPage(0, { scrollToBottom: false, callback: callback, bufferSize: 1 });
             }
         } else if (countXhr.status >= 500 && countXhr.status < 600) {
             if (retryCount < MAX_RETRIES) {
                 var delay = Math.min(30000, 1000 * Math.pow(2, retryCount));
-                logDebug('[LAST_PAGE_v8] Got HTTP ' + countXhr.status + ', retrying in ' + delay + 'ms');
+                logDebug('[LAST_PAGE_v8.54] Got HTTP ' + countXhr.status + ', retrying in ' + delay + 'ms');
                 setTimeout(function() {
                     loadTaskLastPageSequential(taskUuid, callback, retryCount + 1);
                 }, delay);
                 return;
             } else {
-                logDebug('[LAST_PAGE_v8] Max retries reached, falling back to page 0');
-                loadMessagesPage(0, { scrollToBottom: true, callback: callback, bufferSize: 1 });
+                logDebug('[LAST_PAGE_v8.54] Max retries reached, falling back to page 0');
+                loadMessagesPage(0, { scrollToBottom: false, callback: callback, bufferSize: 1 });
             }
         } else {
-            logDebug('[LAST_PAGE_v8] HTTP error: ' + countXhr.status);
+            logDebug('[LAST_PAGE_v8.54] HTTP error: ' + countXhr.status);
             if (typeof window.setPageLoadStatus === 'function') {
                 window.setPageLoadStatus('error', '⚠️ HTTP ' + countXhr.status, false);
             }
-            loadMessagesPage(0, { scrollToBottom: true, callback: callback, bufferSize: 1 });
+            loadMessagesPage(0, { scrollToBottom: false, callback: callback, bufferSize: 1 });
         }
     };
     
     countXhr.onerror = function() {
-        logDebug('[LAST_PAGE_v8] Network error');
+        logDebug('[LAST_PAGE_v8.54] Network error');
         if (typeof window.setPageLoadStatus === 'function') {
             window.setPageLoadStatus('error', '⚠️ Сетевая ошибка', false);
         }
         if (retryCount < MAX_RETRIES) {
             var delay = Math.min(30000, 1000 * Math.pow(2, retryCount));
-            logDebug('[LAST_PAGE_v8] Network error, retrying in ' + delay + 'ms');
+            logDebug('[LAST_PAGE_v8.54] Network error, retrying in ' + delay + 'ms');
             setTimeout(function() {
                 loadTaskLastPageSequential(taskUuid, callback, retryCount + 1);
             }, delay);
         } else {
-            loadMessagesPage(0, { scrollToBottom: true, callback: callback, bufferSize: 1 });
+            loadMessagesPage(0, { scrollToBottom: false, callback: callback, bufferSize: 1 });
         }
     };
     
     countXhr.ontimeout = function() {
-        logDebug('[LAST_PAGE_v8] Timeout');
+        logDebug('[LAST_PAGE_v8.54] Timeout');
         if (typeof window.setPageLoadStatus === 'function') {
             window.setPageLoadStatus('error', '⚠️ Таймаут', false);
         }
         if (retryCount < MAX_RETRIES) {
             var delay = Math.min(30000, 1000 * Math.pow(2, retryCount));
-            logDebug('[LAST_PAGE_v8] Timeout, retrying in ' + delay + 'ms');
+            logDebug('[LAST_PAGE_v8.54] Timeout, retrying in ' + delay + 'ms');
             setTimeout(function() {
                 loadTaskLastPageSequential(taskUuid, callback, retryCount + 1);
             }, delay);
         } else {
-            loadMessagesPage(0, { scrollToBottom: true, callback: callback, bufferSize: 1 });
+            loadMessagesPage(0, { scrollToBottom: false, callback: callback, bufferSize: 1 });
         }
     };
     
     countXhr.send(countFormData);
 }
-// ==================== BLOCK END: loadTaskLastPageSequential v2.3 ====================
+// ==================== BLOCK END: loadTaskLastPageSequential v8.54 ====================
 </script>
 
 <script nonce="<?= CSP_NONCE ?>">
@@ -8247,6 +8357,25 @@ document.addEventListener('DOMContentLoaded', function() {
     logDebug('[DOM] URL params - task:', taskParam, 'message:', messageParam);
     logDebug('[DOM] window.currentTaskUuid:', window.currentTaskUuid);
     
+    // ==================== BLOCK START: Ensure messages-area-inner container v8.51 ====================
+    // v8.51: Создаём внутренний контейнер для скролла, если его нет
+    var messagesAreaOuter = document.getElementById('messages-area');
+    if (messagesAreaOuter && !messagesAreaOuter.querySelector('.messages-area-inner')) {
+        logDebug('[DOM] Creating messages-area-inner container');
+        var innerDiv = document.createElement('div');
+        innerDiv.className = 'messages-area-inner';
+        innerDiv.id = 'messages-area-inner';
+        // Переносим всё содержимое во внутренний контейнер
+        while (messagesAreaOuter.firstChild) {
+            innerDiv.appendChild(messagesAreaOuter.firstChild);
+        }
+        messagesAreaOuter.appendChild(innerDiv);
+        logDebug('[DOM] messages-area-inner created and content moved');
+    } else if (messagesAreaOuter) {
+        logDebug('[DOM] messages-area-inner already exists');
+    }
+    // ==================== BLOCK END: Ensure messages-area-inner container v8.51 ====================
+
     function setCurrentTaskUuid(value) {
         window.currentTaskUuid = value;
         var input = document.getElementById('current-task-uuid');
@@ -8342,6 +8471,14 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (taskParam && !messageParam) {
         logDebug('[DOM] Processing task parameter (will load LAST page):', taskParam);
+        
+        // v8.50: Добавляем класс loading для стабилизации высоты
+        var messagesAreaElement = document.getElementById('messages-area');
+        if (messagesAreaElement) {
+            messagesAreaElement.classList.add('loading');
+            logDebug('[DOM] Added loading class to messages-area');
+        }
+        
         setCurrentTaskUuid(taskParam);
         
         // Сначала обновляем заголовок (из DOM, если задача уже есть)
@@ -8377,20 +8514,38 @@ document.addEventListener('DOMContentLoaded', function() {
         
         enqueueRequest('loadMessages_lastpage_' + taskParam, function(done) {
             loadTaskLastPageSequential(taskParam, function() {
-                logDebug('[DOM] Last page loaded, scheduling multiple scroll attempts');
+                logDebug('[DOM] Last page loaded');
                 
-                // Множественные попытки прокрутки для надёжности
-                var scrollAttempts = [100, 300, 700, 1500, 2500];
-                for (var a = 0; a < scrollAttempts.length; a++) {
-                    (function(delay) {
-                        setTimeout(function() {
-                            var msgsArea = document.getElementById('messages-area');
-                            if (msgsArea && !window.userIsScrolling) {
-                                msgsArea.scrollTop = msgsArea.scrollHeight;
-                                logDebug('[DOM] Scroll attempt ' + delay + 'ms: scrollTop=' + msgsArea.scrollTop + ', scrollHeight=' + msgsArea.scrollHeight);
-                            }
-                        }, delay);
-                    })(scrollAttempts[a]);
+                // v8.50: Убираем класс loading после загрузки
+                setTimeout(function() {
+                    var msgsArea = document.getElementById('messages-area');
+                    if (msgsArea) {
+                        msgsArea.classList.remove('loading');
+                        msgsArea.classList.add('loaded');
+                        logDebug('[DOM] Removed loading class from messages-area, added loaded class');
+                    }
+                }, 500);
+                
+                // v8.48: НА ДЕСКТОПЕ НЕ ДЕЛАЕМ МНОЖЕСТВЕННЫЕ ПРОКРУТКИ
+                // Прокрутка уже выполнена в renderWindowPages (один раз, с блокировкой body)
+                var isDesktop = window.innerWidth > 768;
+                
+                if (!isDesktop) {
+                    // Только для мобильных - множественные попытки (для надёжности)
+                    var scrollAttempts = [100, 300, 700, 1500, 2500];
+                    for (var a = 0; a < scrollAttempts.length; a++) {
+                        (function(delay) {
+                            setTimeout(function() {
+                                var msgsArea = document.getElementById('messages-area');
+                                if (msgsArea && !window.userIsScrolling) {
+                                    msgsArea.scrollTop = msgsArea.scrollHeight;
+                                    logDebug('[DOM] Mobile scroll attempt ' + delay + 'ms: scrollTop=' + msgsArea.scrollTop);
+                                }
+                            }, delay);
+                        })(scrollAttempts[a]);
+                    }
+                } else {
+                    logDebug('[DOM] Desktop: no additional scroll attempts (renderWindowPages already handled it)');
                 }
                 
                 // v8.9: Добавляем спейсер для мобильных устройств после загрузки
@@ -8503,6 +8658,14 @@ document.addEventListener('DOMContentLoaded', function() {
             
     else if (window.currentTaskUuid && window.currentTaskUuid !== '') {
         logDebug('[DOM] Using existing currentTaskUuid (will load LAST page):', window.currentTaskUuid);
+        
+        // v8.50: Добавляем класс loading для стабилизации высоты
+        var messagesAreaElement = document.getElementById('messages-area');
+        if (messagesAreaElement) {
+            messagesAreaElement.classList.add('loading');
+            logDebug('[DOM] Added loading class to messages-area');
+        }
+        
         setCurrentTaskUuid(window.currentTaskUuid);
         
         updateChatHeaderForTask(window.currentTaskUuid);
@@ -8541,17 +8704,35 @@ document.addEventListener('DOMContentLoaded', function() {
         
         enqueueRequest('loadMessages_lastpage_' + window.currentTaskUuid, function(done) {
             loadTaskLastPageSequential(window.currentTaskUuid, function() {
-                var scrollAttempts = [100, 300, 700, 1500, 2500];
-                for (var a = 0; a < scrollAttempts.length; a++) {
-                    (function(delay) {
-                        setTimeout(function() {
-                            var msgsArea = document.getElementById('messages-area');
-                            if (msgsArea && !window.userIsScrolling) {
-                                msgsArea.scrollTop = msgsArea.scrollHeight;
-                                logDebug('[DOM] Scroll attempt ' + delay + 'ms: scrollTop=' + msgsArea.scrollTop);
-                            }
-                        }, delay);
-                    })(scrollAttempts[a]);
+                logDebug('[DOM] Last page loaded');
+                
+                // v8.50: Убираем класс loading после загрузки
+                setTimeout(function() {
+                    var msgsArea = document.getElementById('messages-area');
+                    if (msgsArea) {
+                        msgsArea.classList.remove('loading');
+                        msgsArea.classList.add('loaded');
+                        logDebug('[DOM] Removed loading class from messages-area, added loaded class');
+                    }
+                }, 500);
+                
+                var isDesktop = window.innerWidth > 768;
+                
+                if (!isDesktop) {
+                    var scrollAttempts = [100, 300, 700, 1500, 2500];
+                    for (var a = 0; a < scrollAttempts.length; a++) {
+                        (function(delay) {
+                            setTimeout(function() {
+                                var msgsArea = document.getElementById('messages-area');
+                                if (msgsArea && !window.userIsScrolling) {
+                                    msgsArea.scrollTop = msgsArea.scrollHeight;
+                                    logDebug('[DOM] Mobile scroll attempt ' + delay + 'ms: scrollTop=' + msgsArea.scrollTop);
+                                }
+                            }, delay);
+                        })(scrollAttempts[a]);
+                    }
+                } else {
+                    logDebug('[DOM] Desktop: no additional scroll attempts');
                 }
                 
                 // v8.9: Добавляем спейсер для мобильных устройств после загрузки
@@ -9036,7 +9217,9 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
             
             <div class="messages-area" id="messages-area">
-                <div class="empty-state">Выберите задачу для обсуждения</div>
+                <div class="messages-area-inner" id="messages-area-inner">
+                    <div class="empty-state">Выберите задачу для обсуждения</div>
+                </div>
             </div>
             
             <div class="message-input-area" id="input-area" style="<?= $selected_task_uuid ? 'display:block;' : 'display:none;' ?>">
@@ -9391,15 +9574,18 @@ function smartUpdateMessage(messageData) {
             }
         }
         
+
         // Прокрутка если новое сообщение внизу
         var containerScroll = document.getElementById('messages-area');
         if (containerScroll) {
             var distToBottom = containerScroll.scrollHeight - containerScroll.scrollTop - containerScroll.clientHeight;
             if (distToBottom < 300) {
-                setTimeout(function() { containerScroll.scrollTop = containerScroll.scrollHeight; }, 100);
+                setTimeout(function() { 
+                    containerScroll.scrollTop = containerScroll.scrollHeight; 
+                    logDebug('[SMART_UPDATE] Scrolled container to bottom');
+                }, 100);
             }
-        }
-        
+        }        
         logDebug('[SMART_UPDATE] Added new message: ' + messageData.uuid);
         return true;
     }
@@ -10007,218 +10193,36 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
 
 
 
+
 <style>
-/* ==================== BLOCK START: Edit Message Modal Styles v8.32 ==================== */
-.edit-message-modal {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 30000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-}
-
-.edit-message-modal-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(4px);
-    pointer-events: auto;
-}
-
-.edit-message-modal-container {
-    position: relative;
-    width: 90%;
-    max-width: 550px;
-    background: #1e293b;
-    border-radius: 20px;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(79, 124, 255, 0.3);
-    pointer-events: auto;
-    animation: editModalSlideIn 0.2s ease;
-    overflow: hidden;
-}
-
-@keyframes editModalSlideIn {
-    from {
-        opacity: 0;
-        transform: scale(0.95) translateY(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-    }
-}
-
-.edit-message-modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 16px 20px;
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    border-bottom: 1px solid rgba(79, 124, 255, 0.3);
-}
-
-.edit-message-modal-header h3 {
-    margin: 0;
-    font-size: 18px;
-    color: #e9eefc;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.edit-message-modal-close {
-    background: rgba(255, 255, 255, 0.1);
-    border: none;
-    color: #9ca3af;
-    font-size: 20px;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-}
-
-.edit-message-modal-close:hover {
-    background: rgba(239, 68, 68, 0.2);
-    color: #f87171;
-}
-
-.edit-message-modal-body {
-    padding: 20px;
-}
-
-.edit-message-reply-info {
-    background: rgba(79, 124, 255, 0.1);
-    border-left: 3px solid #4f7cff;
-    border-radius: 10px;
-    padding: 12px;
-    margin-bottom: 16px;
-}
-
-.edit-message-reply-badge {
-    font-size: 12px;
-    color: #4f7cff;
-    margin-bottom: 8px;
-    font-weight: 500;
-}
-
-.edit-message-reply-quote {
-    font-size: 13px;
-    color: #cbd5e1;
-    background: rgba(0, 0, 0, 0.3);
-    padding: 8px 12px;
-    border-radius: 8px;
-    word-break: break-word;
-    max-height: 100px;
-    overflow-y: auto;
-}
-
-.edit-message-textarea {
-    width: 100%;
-    padding: 14px;
-    border-radius: 12px;
-    border: 1px solid #334155;
-    background: #0f172a;
-    color: #e9eefc;
-    font-size: 14px;
-    font-family: inherit;
-    resize: vertical;
-    transition: border-color 0.2s;
-}
-
-.edit-message-textarea:focus {
-    outline: none;
-    border-color: #4f7cff;
-    box-shadow: 0 0 0 2px rgba(79, 124, 255, 0.2);
-}
-
-.edit-message-warning {
-    margin-top: 10px;
-    padding: 8px 12px;
-    background: rgba(239, 68, 68, 0.15);
-    border-radius: 8px;
-    color: #f87171;
-    font-size: 13px;
-}
-
-.edit-message-modal-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-    padding: 16px 20px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    background: #0f172a;
-}
-
-.edit-message-btn-cancel {
-    background: rgba(255, 255, 255, 0.08);
-    border: none;
-    padding: 10px 20px;
-    border-radius: 10px;
-    color: #e9eefc;
-    cursor: pointer;
-    font-size: 14px;
-    transition: all 0.2s;
-}
-
-.edit-message-btn-cancel:hover {
-    background: rgba(0, 0, 0, 0.05);
-}
-
-.edit-message-btn-save {
-    background: #4f7cff;
-    border: none;
-    padding: 10px 24px;
-    border-radius: 10px;
-    color: white;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    transition: all 0.2s;
-}
-
-.edit-message-btn-save:hover {
-    background: #3b66e0;
-    transform: translateY(-1px);
-}
-
-.edit-message-btn-save:disabled,
-.edit-message-btn-cancel:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
-}
-
-/* На мобильных устройствах */
+/* ==================== FORCE FIX: Input area position ==================== */
 @media (max-width: 768px) {
-    .edit-message-modal-container {
-        width: 95%;
-        max-width: none;
-        margin: 16px;
+    .message-input-area {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        background: #1e1e1e !important;
+        border-top: 1px solid #2c2c2c !important;
+        padding: 12px !important;
+        padding-bottom: max(12px, env(safe-area-inset-bottom, 12px)) !important;
+        z-index: 9999 !important;
+        margin: 0 !important;
+        box-sizing: border-box !important;
     }
     
-    .edit-message-modal-body {
-        padding: 16px;
+    /* Убеждаемся, что body не мешает */
+    body {
+        position: relative !important;
+        min-height: 100vh !important;
     }
     
-    .edit-message-textarea {
-        font-size: 16px;
+    /* Отступ снизу для контента, чтобы не перекрывался панелью */
+    #messages-area {
+        padding-bottom: 100px !important;
     }
 }
-/* ==================== BLOCK END: Edit Message Modal Styles v8.32 ==================== */
 </style>
-<!-- ==================== BLOCK END: Edit Message Modal v8.32 ==================== -->
+
 
 <?php require_once __DIR__ . '/layouts/page_end.php'; ?>
