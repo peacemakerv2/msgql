@@ -91,6 +91,7 @@ $stmt->execute();
 $current_user_data = $stmt->get_result()->fetch_assoc();
 
 // ========== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ОТПРАВКИ УВЕДОМЛЕНИЙ (ОБНОВЛЕНА) ==========
+
 function send_user_change_notification($user_uuid, $change_type, $change_details, $actor_name) {
     global $system_title, $EM_Sender, $replyto;
     
@@ -237,6 +238,137 @@ function check_user_task_permission($user_uuid, $task_uuid, $permission_type = '
 }
 // ==================== BLOCK END: check_user_task_permission v1.1 ====================
 
+// ==================== BLOCK START: validate_and_save_email v1.0 ====================
+// ver.1.0 (2026-06-09) - ЕДИНАЯ ПРОЦЕДУРА ПРОВЕРКИ И СОХРАНЕНИЯ EMAIL
+// - Проверка формата email
+// - Проверка запрещённых доменов (.com и другие)
+// - Проверка уникальности email в БД
+// - Сохранение email в БД
+// - Логирование всех действий
+
+/**
+ * Единая процедура проверки и сохранения email для пользователя
+ * 
+ * @param mysqli $db Подключение к БД
+ * @param string $user_uuid UUID пользователя (для проверки уникальности при обновлении)
+ * @param string $email Email для проверки и сохранения
+ * @param bool $is_new_user true - создание нового пользователя, false - обновление существующего
+ * @return array ['success' => bool, 'error' => string, 'email' => string]
+ */
+function validate_and_save_email(mysqli $db, string $user_uuid, string $email, bool $is_new_user = false): array {
+    // Запрещённые домены (можно добавлять любые)
+    $blocked_domains = [
+        '.com',
+        '.ua',
+        // Добавляйте другие домены при необходимости:
+        // 'gmail.com',
+    ];
+    
+    $original_email = $email;
+    $email = trim($email);
+    
+    // Логируем начало проверки
+    log_debug("[EMAIL_VALIDATE] Starting validation for user: {$user_uuid}, email: " . ($email ?: '(empty)'));
+    
+    // 1. Если email пустой - разрешено (не обязательное поле)
+    if (empty($email)) {
+        log_debug("[EMAIL_VALIDATE] Email is empty, skipping validation");
+        
+        // Сохраняем NULL в БД
+        if ($is_new_user) {
+            // При создании пользователя email будет сохранён позже в основном INSERT
+            return ['success' => true, 'error' => '', 'email' => null];
+        } else {
+            $stmt = $db->prepare("UPDATE users SET email = NULL WHERE uuid = ?");
+            $stmt->bind_param("s", $user_uuid);
+            $success = $stmt->execute();
+            $stmt->close();
+            
+            if ($success) {
+                log_debug("[EMAIL_VALIDATE] Email cleared successfully for user: {$user_uuid}");
+                return ['success' => true, 'error' => '', 'email' => null];
+            } else {
+                log_error("[EMAIL_VALIDATE] Failed to clear email: " . $db->error);
+                return ['success' => false, 'error' => 'Ошибка сохранения email', 'email' => null];
+            }
+        }
+    }
+    
+    // 2. Проверка формата email
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        log_warning("[EMAIL_VALIDATE] Invalid email format: {$email}");
+        return ['success' => false, 'error' => 'Некорректный формат email адреса', 'email' => $email];
+    }
+    
+    // 3. Приводим к нижнему регистру
+    $email = strtolower($email);
+    
+    // 4. Проверка запрещённых доменов
+    $is_blocked = false;
+    $blocked_domain_found = '';
+    
+    foreach ($blocked_domains as $blocked) {
+        if (strpos($email, $blocked) !== false) {
+            $is_blocked = true;
+            $blocked_domain_found = $blocked;
+            break;
+        }
+    }
+    
+    if ($is_blocked) {
+        log_warning("[EMAIL_VALIDATE] Blocked domain detected: {$blocked_domain_found} in email: {$email}");
+        return ['success' => false, 'error' => "Использование домена '{$blocked_domain_found}' запрещено. Пожалуйста, используйте другой email.", 'email' => $email];
+    }
+    
+    // // 5. Проверка уникальности email (только для обновления существующего пользователя)
+    // if (!$is_new_user) {
+    //     $check_stmt = $db->prepare("SELECT uuid FROM users WHERE email = ? AND uuid != ?");
+    //     $check_stmt->bind_param("ss", $email, $user_uuid);
+    //     $check_stmt->execute();
+        
+    //     if ($check_stmt->get_result()->num_rows > 0) {
+    //         log_warning("[EMAIL_VALIDATE] Duplicate email detected: {$email}");
+    //         $check_stmt->close();
+    //         return ['success' => false, 'error' => 'Этот email уже используется другим пользователем', 'email' => $email];
+    //     }
+    //     $check_stmt->close();
+    // } else {
+    //     // Для нового пользователя проверяем вообще всех
+    //     $check_stmt = $db->prepare("SELECT uuid FROM users WHERE email = ?");
+    //     $check_stmt->bind_param("s", $email);
+    //     $check_stmt->execute();
+        
+    //     if ($check_stmt->get_result()->num_rows > 0) {
+    //         log_warning("[EMAIL_VALIDATE] Duplicate email detected for new user: {$email}");
+    //         $check_stmt->close();
+    //         return ['success' => false, 'error' => 'Пользователь с таким email уже существует', 'email' => $email];
+    //     }
+    //     $check_stmt->close();
+    // }
+    
+    // 6. Сохраняем email
+    if (!$is_new_user) {
+        $stmt = $db->prepare("UPDATE users SET email = ? WHERE uuid = ?");
+        $stmt->bind_param("ss", $email, $user_uuid);
+        $success = $stmt->execute();
+        $stmt->close();
+        
+        if ($success) {
+            log_debug("[EMAIL_VALIDATE] Email saved successfully: {$email} for user: {$user_uuid}");
+            return ['success' => true, 'error' => '', 'email' => $email];
+        } else {
+            log_error("[EMAIL_VALIDATE] Failed to save email: " . $db->error);
+            return ['success' => false, 'error' => 'Ошибка сохранения email: ' . $db->error, 'email' => $email];
+        }
+    }
+    
+    // Для нового пользователя - возвращаем успех, сохранение будет в основном запросе
+    log_debug("[EMAIL_VALIDATE] Email validation passed for new user: {$email}");
+    return ['success' => true, 'error' => '', 'email' => $email];
+}
+// ==================== BLOCK END: validate_and_save_email v1.0 ====================
+
+
 // ==================== CSRF-ЗАЩИТА ДЛЯ ВСЕХ POST-ЗАПРОСОВ ====================
 // Проверяем CSRF-токен для всех мутирующих действий
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -254,6 +386,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // Обработка POST-запросов
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// ==================== BLOCK START: update_profile with email validation v1.0 ====================
+// ver.1.0 (2026-06-09) - ИНТЕГРАЦИЯ ПРОВЕРКИ EMAIL В ОБНОВЛЕНИЕ ПРОФИЛЯ
+// - Вызов единой процедуры validate_and_save_email()
+// - Сохранение остальных полей без изменений
+
     if ($_POST['action'] === 'update_profile') {
         $name = trim($_POST['name'] ?? '');
         $email = trim($_POST['email'] ?? '');
@@ -278,14 +415,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         $db = msgql_db();
         
+        // Проверка уникальности логина
         $check = $db->prepare("SELECT uuid FROM users WHERE login = ? AND uuid != ?");
         $check->bind_param("ss", $login, $current_user_uuid);
         $check->execute();
         if ($check->get_result()->num_rows > 0) {
             $error = 'Этот логин уже занят';
-        } else {
-            $stmt = $db->prepare("UPDATE users SET name = ?, email = ?, tel = ?, login = ?, alert_interval_min = ?, alert_days = ?, sound_enabled = ?, sound_interval_sec = ? WHERE uuid = ?");
-            $stmt->bind_param("ssssisiis", $name, $email, $tel, $login, $alert_interval_min, $alert_days, $sound_enabled, $sound_interval_sec, $current_user_uuid);
+        }
+        
+        // ========== ПРОВЕРКА И СОХРАНЕНИЕ EMAIL ==========
+        if (empty($error)) {
+            $email_result = validate_and_save_email($db, $current_user_uuid, $email, false);
+            
+            if (!$email_result['success']) {
+                $error = $email_result['error'];
+                log_warning("[PROFILE_UPDATE] Email validation failed: {$error}");
+            } else {
+                // Email успешно сохранён функцией validate_and_save_email
+                $email = $email_result['email']; // может быть null если был очищен
+                log_debug("[PROFILE_UPDATE] Email validation passed, saved email: " . ($email ?: 'null'));
+            }
+        }
+        // ========== КОНЕЦ ПРОВЕРКИ EMAIL ==========
+        
+        if (empty($error)) {
+            // Обновляем остальные поля (email уже обновлён в validate_and_save_email)
+            $stmt = $db->prepare("UPDATE users SET name = ?, tel = ?, login = ?, alert_interval_min = ?, alert_days = ?, sound_enabled = ?, sound_interval_sec = ? WHERE uuid = ?");
+            $stmt->bind_param("sssisiis", $name, $tel, $login, $alert_interval_min, $alert_days, $sound_enabled, $sound_interval_sec, $current_user_uuid);
+            
             if ($stmt->execute()) {
                 $_SESSION['login'] = $login;
                 $success = 'Личные данные обновлены.';
@@ -294,7 +451,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $current_user_data['sound_enabled'] = $sound_enabled;
                 $current_user_data['sound_interval_sec'] = $sound_interval_sec;
                 
-                // ========== ПРОВЕРКА ПАРОЛЯ ДЛЯ force_password_change (из второго обработчика) ==========
+                log_debug("[PROFILE_UPDATE] Profile updated successfully for user: {$current_user_uuid}");
+                
+                // ========== ПРОВЕРКА ПАРОЛЯ ДЛЯ force_password_change ==========
                 $check_pass = $db->prepare("SELECT pass, salt FROM users WHERE uuid = ?");
                 $check_pass->bind_param("s", $current_user_uuid);
                 $check_pass->execute();
@@ -312,7 +471,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ?>
                 <script nonce="<?= CSP_NONCE ?>">
                 (function() {
-                    // Обновляем единый источник
                     if (typeof window.userSettings === 'undefined') {
                         window.userSettings = {};
                     }
@@ -320,11 +478,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     window.userSettings.soundEnabled = <?= $sound_enabled ? 'true' : 'false' ?>;
                     window.userSettings.soundIntervalSec = <?= (int)$sound_interval_sec ?>;
                     
-                    // Синхронизируем sessionStorage
                     sessionStorage.setItem('sse_sound_enabled', window.userSettings.soundEnabled ? '1' : '0');
                     sessionStorage.setItem('sse_sound_interval', window.userSettings.soundIntervalSec);
                     
-                    // Обновляем SSE если нужно
                     if (window.SSE && typeof window.SSE.updateSoundSettings === 'function') {
                         window.SSE.updateSoundSettings(
                             window.userSettings.soundEnabled,
@@ -332,7 +488,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         );
                     }
                     
-                    // Обновляем Service Worker
                     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
                         navigator.serviceWorker.controller.postMessage({
                             type: 'updateSoundSettings',
@@ -346,75 +501,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </script>
                 <?php
             } else {
-                $error = 'Ошибка при сохранении';
+                $error = 'Ошибка при сохранении: ' . $db->error;
+                log_error("[PROFILE_UPDATE] DB error: " . $db->error);
             }
+            $stmt->close();
         }
     }
-    
-// ==================== BLOCK START: change_password handler v3.0 (with audit logging) ====================
-// ver.2.1 (2026-06-03) - Упрощённая версия без pass_version
-// ver.3.0 (2026-06-05) - ДОБАВЛЕН АУДИТ СМЕНЫ ПАРОЛЯ
-// - Логирование в файл и БД при успешной смене пароля
-// - Сброс флага принудительной смены пароля
+    // ==================== BLOCK END: update_profile with email validation v1.0 ====================
 
-elseif ($_POST['action'] === 'change_password') {
-    $new_pass = $_POST['new_pass'] ?? '';
-    $confirm_pass = $_POST['confirm_pass'] ?? '';
-    
-    log_debug("[PASSWORD_CHANGE] Password change attempt for user: {$current_user_uuid}");
-    
-    if (strlen($new_pass) < 10) {
-        $error = 'Пароль должен быть не менее 10 символов';
-        log_debug("[PASSWORD_CHANGE] Failed: too short (length: " . strlen($new_pass) . ")");
-    } elseif ($new_pass !== $confirm_pass) {
-        $error = 'Пароли не совпадают';
-        log_debug("[PASSWORD_CHANGE] Failed: passwords do not match");
-    } else {
-        $db = msgql_db();
-        $salt_user = bin2hex(random_bytes(16));
-        $hashed = msgql_password_hash($new_pass, $salt_user);
         
-        $stmt = $db->prepare("UPDATE users SET pass = ?, salt = ? WHERE uuid = ?");
-        $stmt->bind_param("sss", $hashed, $salt_user, $current_user_uuid);
+    // ==================== BLOCK START: change_password handler v3.0 (with audit logging) ====================
+    // ver.2.1 (2026-06-03) - Упрощённая версия без pass_version
+    // ver.3.0 (2026-06-05) - ДОБАВЛЕН АУДИТ СМЕНЫ ПАРОЛЯ
+    // - Логирование в файл и БД при успешной смене пароля
+    // - Сброс флага принудительной смены пароля
+
+    elseif ($_POST['action'] === 'change_password') {
+        $new_pass = $_POST['new_pass'] ?? '';
+        $confirm_pass = $_POST['confirm_pass'] ?? '';
         
-        if ($stmt->execute()) {
-            $success = 'Пароль успешно изменён.';
-            log_debug("[PASSWORD_CHANGE] Password changed successfully for user: {$current_user_uuid}");
-            
-            // V3.0: АУДИТ СМЕНЫ ПАРРОЛЯ
-            if (function_exists('msgql_log_password_change')) {
-                $audit_result = msgql_log_password_change($current_user_uuid, $current_user_uuid, $db);
-                if ($audit_result) {
-                    log_debug("[PASSWORD_CHANGE] Password change audited successfully");
-                } else {
-                    log_warning("[PASSWORD_CHANGE] Failed to audit password change");
-                }
-            } else {
-                log_warning("[PASSWORD_CHANGE] msgql_log_password_change function not available");
-            }
-            
-            // V2.1: Обновляем auth_hash в текущей сессии (чтобы не разлогинивать пользователя)
-            $auth_hash_data = $current_user_uuid . $hashed;
-            $_SESSION['auth_hash'] = hash('sha256', $auth_hash_data);
-            log_debug("[PASSWORD_CHANGE] auth_hash updated for current session");
-            
-            // Сбрасываем флаг принудительной смены пароля
-            if (isset($_SESSION['force_password_change'])) {
-                unset($_SESSION['force_password_change']);
-                log_debug("[PASSWORD_CHANGE] force_password_change flag removed");
-                
-                $_SESSION['flash_message'] = '✓ Пароль установлен! Теперь вам доступны все разделы.';
-                $_SESSION['flash_type'] = 'success';
-            }
-            
+        log_debug("[PASSWORD_CHANGE] Password change attempt for user: {$current_user_uuid}");
+        
+        if (strlen($new_pass) < 10) {
+            $error = 'Пароль должен быть не менее 10 символов';
+            log_debug("[PASSWORD_CHANGE] Failed: too short (length: " . strlen($new_pass) . ")");
+        } elseif ($new_pass !== $confirm_pass) {
+            $error = 'Пароли не совпадают';
+            log_debug("[PASSWORD_CHANGE] Failed: passwords do not match");
         } else {
-            $error = 'Ошибка при сохранении пароля.';
-            log_error("[PASSWORD_CHANGE] Failed: DB error - " . $db->error);
+            $db = msgql_db();
+            $salt_user = bin2hex(random_bytes(16));
+            $hashed = msgql_password_hash($new_pass, $salt_user);
+            
+            $stmt = $db->prepare("UPDATE users SET pass = ?, salt = ? WHERE uuid = ?");
+            $stmt->bind_param("sss", $hashed, $salt_user, $current_user_uuid);
+            
+            if ($stmt->execute()) {
+                $success = 'Пароль успешно изменён.';
+                log_debug("[PASSWORD_CHANGE] Password changed successfully for user: {$current_user_uuid}");
+                
+                // V3.0: АУДИТ СМЕНЫ ПАРРОЛЯ
+                if (function_exists('msgql_log_password_change')) {
+                    $audit_result = msgql_log_password_change($current_user_uuid, $current_user_uuid, $db);
+                    if ($audit_result) {
+                        log_debug("[PASSWORD_CHANGE] Password change audited successfully");
+                    } else {
+                        log_warning("[PASSWORD_CHANGE] Failed to audit password change");
+                    }
+                } else {
+                    log_warning("[PASSWORD_CHANGE] msgql_log_password_change function not available");
+                }
+                
+                // V2.1: Обновляем auth_hash в текущей сессии (чтобы не разлогинивать пользователя)
+                $auth_hash_data = $current_user_uuid . $hashed;
+                $_SESSION['auth_hash'] = hash('sha256', $auth_hash_data);
+                log_debug("[PASSWORD_CHANGE] auth_hash updated for current session");
+                
+                // Сбрасываем флаг принудительной смены пароля
+                if (isset($_SESSION['force_password_change'])) {
+                    unset($_SESSION['force_password_change']);
+                    log_debug("[PASSWORD_CHANGE] force_password_change flag removed");
+                    
+                    $_SESSION['flash_message'] = '✓ Пароль установлен! Теперь вам доступны все разделы.';
+                    $_SESSION['flash_type'] = 'success';
+                }
+                
+            } else {
+                $error = 'Ошибка при сохранении пароля.';
+                log_error("[PASSWORD_CHANGE] Failed: DB error - " . $db->error);
+            }
+            $stmt->close();
         }
-        $stmt->close();
     }
-}
-// ==================== BLOCK END: change_password handler v3.0 ====================
+    // ==================== BLOCK END: change_password handler v3.0 ====================
 
      
     // Обработка пользователей ТОЛЬКО ДЛЯ АДМИНИСТРАТОРА
