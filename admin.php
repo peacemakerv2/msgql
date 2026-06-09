@@ -1584,7 +1584,7 @@ $csrf_token = msgql_csrf_get_token();
                                             JOIN tasks t ON s.task_uuid = t.uuid
                                             JOIN users u ON s.user_uuid = u.uuid
                                             JOIN users sb ON s.subscribed_by_uuid = sb.uuid
-                                            ORDER BY t.title, u.login";
+                                            ORDER BY s.subscribed_at DESC";
                         $subscribers_result = $db->query($subscribers_sql);
                         $subscribers_list = $subscribers_result->fetch_all(MYSQLI_ASSOC);
                         ?>
