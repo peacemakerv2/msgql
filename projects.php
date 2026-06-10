@@ -1602,11 +1602,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
             }
         }
         
-        // ==================== BLOCK START: ajax_get_task_info v4.6 ====================
+        // ==================== BLOCK START: ajax_get_task_info v4.7 (fixed parent_chain) ====================
         // ver.4.2 - Базовая версия получения информации о задаче
         // ver.4.6 (2026-06-02) - ДОБАВЛЕН ВОЗВРАТ parent_task_uuid ДЛЯ ВСЕХ ЗАДАЧ
-        // - Теперь parent_chain строится корректно даже для подзадач
-        // - Добавлена отладочная информация в лог
+        // ver.4.7 (2026-06-10) - ИСПРАВЛЕНА ПОСТРОЕНИЕ parent_chain ДЛЯ ПОДЗАДАЧ
+        // - Исправлен цикл обхода родителей (теперь CORRECTLY обрабатывает parent_task_uuid)
+        // - Добавлено логирование каждого найденного родителя
+        // - parent_chain теперь всегда содержит ВСЕХ родителей задачи
 
         elseif ($action === 'get_task_info') {
             $task_uuid = $_POST['task_uuid'] ?? '';
@@ -1639,24 +1641,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                     } else {
                         $task = get_task_data($task_uuid, $current_user_uuid, $db);
                         if ($task) {
-                            // Получаем цепочку родителей (включая прямой parent_task_uuid)
+                            // ========== v4.7: ИСПРАВЛЕНА ПОСТРОЕНИЕ ЦЕПОЧКИ РОДИТЕЛЕЙ ==========
                             $parent_chain = [];
-                            $current = $task_uuid;
-                            $stmt = $db->prepare("SELECT parent_task_uuid FROM tasks WHERE uuid = ?");
                             
-                            while ($current) {
-                                $stmt->bind_param("s", $current);
-                                $stmt->execute();
-                                $row = $stmt->get_result()->fetch_assoc();
-                                if ($row && !empty($row['parent_task_uuid'])) {
-                                    array_unshift($parent_chain, $row['parent_task_uuid']);
-                                    $current = $row['parent_task_uuid'];
-                                    log_debug("[GET_TASK_INFO] Parent found: {$current}");
-                                } else {
-                                    $current = null;
+                            if (!empty($direct_parent)) {
+                                // Начинаем с прямого родителя
+                                $current_parent = $direct_parent;
+                                $stmt = $db->prepare("SELECT parent_task_uuid FROM tasks WHERE uuid = ?");
+                                
+                                while ($current_parent) {
+                                    log_debug("[GET_TASK_INFO] Adding parent to chain: {$current_parent}");
+                                    array_unshift($parent_chain, $current_parent);
+                                    
+                                    $stmt->bind_param("s", $current_parent);
+                                    $stmt->execute();
+                                    $row = $stmt->get_result()->fetch_assoc();
+                                    
+                                    if ($row && !empty($row['parent_task_uuid'])) {
+                                        $current_parent = $row['parent_task_uuid'];
+                                        log_debug("[GET_TASK_INFO] Moving to next parent: {$current_parent}");
+                                    } else {
+                                        $current_parent = null;
+                                        log_debug("[GET_TASK_INFO] No more parents, stopping");
+                                    }
                                 }
+                                $stmt->close();
+                            } else {
+                                log_debug("[GET_TASK_INFO] Task has no parent (root task)");
                             }
-                            $stmt->close();
                             
                             log_debug("[GET_TASK_INFO] Full parent chain: " . json_encode($parent_chain));
                             
@@ -1664,7 +1676,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                             $response['task'] = $task;
                             $response['task']['parent_chain'] = $parent_chain;
                             $response['task']['project_uuid'] = $task['project_uuid'];
-                            $response['task']['direct_parent_uuid'] = $direct_parent; // v4.6: добавляем прямой parent
+                            $response['task']['direct_parent_uuid'] = $direct_parent;
                         } else {
                             $response['error'] = 'Задача не найдена';
                             log_warning("[GET_TASK_INFO] Task data not accessible: {$task_uuid}");
@@ -1673,7 +1685,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                 }
             }
         }
-        // ==================== BLOCK END: ajax_get_task_info v4.6 ====================
+        // ==================== BLOCK END: ajax_get_task_info v4.7 ====================
         
         // Проверка прав на редактирование
         elseif ($action === 'check_edit_permission') {
@@ -1865,6 +1877,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
 }
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+
+// ==================== BLOCK START: get_task_with_parents v1.0 ====================
+// ver.1.0 (2026-06-10) - ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ЦЕПОЧКИ РОДИТЕЛЕЙ ЗАДАЧИ
+// Используется при прямом переходе по ссылке на подзадачу
+function get_task_with_parents($task_uuid, $db) {
+    $stmt = $db->prepare("
+        WITH RECURSIVE task_tree AS (
+            SELECT uuid, parent_task_uuid, project_uuid, title
+            FROM tasks WHERE uuid = ?
+            UNION ALL
+            SELECT t.uuid, t.parent_task_uuid, t.project_uuid, t.title
+            FROM tasks t
+            INNER JOIN task_tree tt ON t.uuid = tt.parent_task_uuid
+        )
+        SELECT uuid, parent_task_uuid, project_uuid, title FROM task_tree
+    ");
+    $stmt->bind_param("s", $task_uuid);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $parents = [];
+    while ($row = $result->fetch_assoc()) {
+        $parents[] = $row;
+    }
+    $stmt->close();
+    return $parents;
+}
+// ==================== BLOCK END: get_task_with_parents v1.0 ====================
 
 
 // ==================== BLOCK START: get_task_parent_chain v4.9 ====================
@@ -5736,6 +5775,14 @@ document.addEventListener('DOMContentLoaded', function() {
         return false;
     }
     
+    // ==================== BLOCK START: task_url_handler v4.9 (with recursive parent expansion) ====================
+    // ver.4.8 - Базовая версия обработки задачи из URL
+    // ver.4.9 (2026-06-10) - ИСПРАВЛЕНА ЗАГРУЗКА ПОДЗАДАЧ ПРИ ПРЯМОМ ПЕРЕХОДЕ ПО ССЫЛКЕ
+    // - Добавлена рекурсивная функция findAndExpandTask
+    // - Автоматическое раскрытие родителей для подзадач
+    // - Увеличен лимит попыток до 60 с увеличивающейся задержкой
+    // - Улучшено логирование для отладки
+
     if (taskUuid) {
         logDebug('[INIT] Processing task URL parameter:', taskUuid);
         
@@ -5755,10 +5802,19 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.success && data.task) {
                 var neededProjectUuid = data.task.project_uuid;
                 var parentChain = data.task.parent_chain || [];
-                var directParent = data.task.direct_parent_uuid || null;
+                var hasParents = parentChain.length > 0;
                 
                 logDebug('[INIT] Task belongs to project:', neededProjectUuid);
                 logDebug('[INIT] Parent chain:', JSON.stringify(parentChain));
+                logDebug('[INIT] Has parents:', hasParents);
+                
+                var existingTask = document.querySelector('.flat-task-item[data-task-uuid="' + taskUuid + '"], .subtask-item[data-task-uuid="' + taskUuid + '"]');
+                
+                if (existingTask) {
+                    logDebug('[INIT] Task already in DOM, just highlight');
+                    highlightAndScrollToTask(existingTask);
+                    return;
+                }
                 
                 var projectCard = document.querySelector('.project-card[data-project-uuid="' + neededProjectUuid + '"]');
                 if (!projectCard) {
@@ -5780,6 +5836,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.getElementById('selected-project-title').innerHTML = escapeHtml(project.title) + ' <span style="font-size:13px;color:rgba(233,238,252,.6);font-weight:normal">- задачи проекта</span>';
                 }
                 
+                checkTaskCreationPermission(neededProjectUuid);
+                loadProjectUsersForFilter(neededProjectUuid);
+                
                 getTaskPageInfo(
                     taskUuid,
                     neededProjectUuid,
@@ -5792,48 +5851,160 @@ document.addEventListener('DOMContentLoaded', function() {
                 ).then(function(pageInfo) {
                     logDebug('[INIT] Task page info:', pageInfo);
                     currentTaskPage = pageInfo.page;
+                    
                     loadProjectTasks(false);
                     
-                    setTimeout(function() {
-                        if (parentChain && parentChain.length > 0) {
-                            logDebug('[INIT] Expanding parent chain of', parentChain.length, 'parents');
-                            
-                            var firstParentId = parentChain[0];
-                            var checkParentInterval = setInterval(function() {
-                                var parentElement = document.querySelector('.flat-task-item[data-task-uuid="' + firstParentId + '"]');
-                                if (parentElement) {
-                                    clearInterval(checkParentInterval);
-                                    logDebug('[INIT] Parent element found, starting expansion');
-                                    expandParentsChain(0, parentChain, taskUuid, function() {
-                                        logDebug('[INIT] Parent chain expanded, searching for task');
-                                        findAndHighlightTask(taskUuid, 50, 0);
-                                    });
-                                } else {
-                                    logDebug('[INIT] Waiting for parent element to render:', firstParentId);
-                                }
-                            }, 200);
-                            
-                            setTimeout(function() {
-                                clearInterval(checkParentInterval);
-                                var parentElement = document.querySelector('.flat-task-item[data-task-uuid="' + firstParentId + '"]');
-                                if (!parentElement) {
-                                    logWarning('[INIT] Parent element not rendered after 10 seconds');
-                                    findAndHighlightTask(taskUuid, 50, 0);
-                                }
-                            }, 10000);
-                        } else {
-                            logDebug('[INIT] No parents to expand, searching for root task');
-                            findAndHighlightTask(taskUuid, 50, 0);
+                    // ==================== BLOCK START: findAndExpandTask v5.0 (with cross-page search) ====================
+                    // ver.4.9 - Базовая версия
+                    // ver.5.0 (2026-06-10) - ДОБАВЛЕН ПОИСК ПО ВСЕМ СТРАНИЦАМ
+                    // - Если задача не найдена на расчётной странице, последовательно проверяются все страницы
+                    // - Максимальное количество страниц для проверки - 20
+                    // - Улучшено логирование процесса поиска
+
+                    function findAndExpandTask(targetUuid, maxAttempts, attempt, searchPagesRemaining) {
+                        attempt = attempt || 0;
+                        maxAttempts = maxAttempts || 60;
+                        searchPagesRemaining = searchPagesRemaining || 0; // 0 = use calculated page first, then search all
+                        
+                        var taskElement = document.querySelector('.flat-task-item[data-task-uuid="' + targetUuid + '"], .subtask-item[data-task-uuid="' + targetUuid + '"]');
+                        
+                        if (taskElement) {
+                            logDebug('[FIND_TASK] Task found! Highlighting...');
+                            highlightAndScrollToTask(taskElement);
+                            return true;
                         }
-                    }, 800);
+                        
+                        // Если это первый вызов и задача не найдена - пробуем поискать по всем страницам
+                        if (attempt === 0 && searchPagesRemaining === 0 && currentProjectUuid) {
+                            logDebug('[FIND_TASK] Task not on page ' + currentTaskPage + ', starting cross-page search');
+                            searchTaskAcrossPages(targetUuid, 1, 20);
+                            return false;
+                        }
+                        
+                        if (parentChain && parentChain.length > 0) {
+                            var firstParentId = parentChain[0];
+                            var parentElement = document.querySelector('.flat-task-item[data-task-uuid="' + firstParentId + '"]');
+                            
+                            if (parentElement) {
+                                logDebug('[FIND_TASK] Parent found, expanding:', firstParentId);
+                                
+                                var childrenDiv = document.getElementById('children-' + firstParentId);
+                                if (childrenDiv && !childrenDiv.classList.contains('expanded')) {
+                                    childrenDiv.classList.add('expanded');
+                                }
+                                
+                                if (childrenDiv && childrenDiv.getAttribute('data-loaded') !== 'true') {
+                                    var loadingDiv = childrenDiv.querySelector('.subtasks-loading');
+                                    if (loadingDiv) loadingDiv.style.display = 'block';
+                                    
+                                    loadSubtasks(firstParentId, 'children-' + firstParentId, 1, false).then(function() {
+                                        if (loadingDiv) loadingDiv.style.display = 'none';
+                                        setTimeout(function() {
+                                            findAndExpandTask(targetUuid, maxAttempts, attempt + 1, searchPagesRemaining);
+                                        }, 300);
+                                    }).catch(function(err) {
+                                        logError('[FIND_TASK] Failed to load subtasks:', err);
+                                        if (loadingDiv) loadingDiv.style.display = 'none';
+                                        setTimeout(function() {
+                                            findAndExpandTask(targetUuid, maxAttempts, attempt + 1, searchPagesRemaining);
+                                        }, 500);
+                                    });
+                                    return false;
+                                }
+                            }
+                        }
+                        
+                        if (attempt >= maxAttempts) {
+                            logWarning('[FIND_TASK] Task not found after', maxAttempts, 'attempts:', targetUuid);
+                            showAlert('Задача не найдена. Возможно, она была удалена или у вас нет доступа.', 'warning');
+                            return false;
+                        }
+                        
+                        var delay = Math.min(1000, 200 + attempt * 30);
+                        logDebug('[FIND_TASK] Attempt', attempt + 1, 'of', maxAttempts, 'retrying in', delay, 'ms');
+                        setTimeout(function() {
+                            findAndExpandTask(targetUuid, maxAttempts, attempt + 1, searchPagesRemaining);
+                        }, delay);
+                        return false;
+                    }
+
+                    // Новая функция для поиска задачи по всем страницам
+                    function searchTaskAcrossPages(targetUuid, startPage, maxPages) {
+                        var page = startPage;
+                        var totalPages = maxPages;
+                        
+                        function tryPage(p) {
+                            if (p > totalPages) {
+                                logWarning('[SEARCH_PAGES] Task not found on any of', totalPages, 'pages');
+                                showAlert('Задача не найдена. Возможно, она была удалена.', 'warning');
+                                return;
+                            }
+                            
+                            logDebug('[SEARCH_PAGES] Checking page', p, 'for task:', targetUuid);
+                            
+                            var formData = new URLSearchParams();
+                            formData.append('action', 'get_project_tasks_sorted');
+                            formData.append('project_uuid', currentProjectUuid);
+                            formData.append('page', p);
+                            formData.append('per_page', currentPerPage);
+                            formData.append('sort_by', currentSortBy);
+                            formData.append('sort_dir', currentSortDir);
+                            formData.append('filter_statuses', JSON.stringify(currentFilterStatuses));
+                            formData.append('filter_assigned', JSON.stringify(currentFilterAssigned));
+                            formData.append('search', currentSearch);
+                            formData.append('ajax_mode', '1');
+                            addCsrfToUrlParams(formData);
+                            
+                            fetch(window.location.href, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                                body: formData
+                            })
+                            .then(function(r) { return r.json(); })
+                            .then(function(data) {
+                                if (data.success && data.tasks) {
+                                    var found = data.tasks.some(function(t) { return t.uuid === targetUuid; });
+                                    
+                                    if (found) {
+                                        logDebug('[SEARCH_PAGES] Task found on page', p);
+                                        currentTaskPage = p;
+                                        loadProjectTasks(false);
+                                        
+                                        setTimeout(function() {
+                                            findAndExpandTask(targetUuid, 30, 0, -1);
+                                        }, 800);
+                                    } else {
+                                        logDebug('[SEARCH_PAGES] Task not on page', p);
+                                        tryPage(p + 1);
+                                    }
+                                } else {
+                                    logError('[SEARCH_PAGES] Failed to load page', p);
+                                    tryPage(p + 1);
+                                }
+                            })
+                            .catch(function(err) {
+                                logError('[SEARCH_PAGES] Error loading page', p, ':', err);
+                                tryPage(p + 1);
+                            });
+                        }
+                        
+                        tryPage(startPage);
+                    }
+                    // ==================== BLOCK END: findAndExpandTask v5.0 ====================
+                    
+                    setTimeout(function() {
+                        logDebug('[INIT] Starting findAndExpandTask for task:', taskUuid);
+                        findAndExpandTask(taskUuid, 20, 0);
+                    }, 1000);
                     
                 }).catch(function(err) {
-                    logError('[INIT] Failed to get page info, falling back to default load:', err);
+                    logError('[INIT] Failed to get page info:', err);
                     window._skipAutoLoad = false;
                     selectProject(neededProjectUuid);
                     setTimeout(function() {
-                        findAndHighlightTask(taskUuid, 50, 0);
-                    }, 1500);
+                        logDebug('[INIT] Starting findAndExpandTask for task:', taskUuid);
+                        findAndExpandTask(taskUuid, 20, 0, 0); // searchPagesRemaining = 0 означает "поискать по всем страницам"
+                    }, 1000);
                 });
                 
             } else {
@@ -5846,8 +6017,9 @@ document.addEventListener('DOMContentLoaded', function() {
             logError('[INIT] Error loading task info:', err);
             window._skipAutoLoad = false;
         });
-        
-    } else if (projectUuid) {
+    }
+    // ==================== BLOCK END: task_url_handler v4.9 ====================
+    else if (projectUuid) {
         logDebug('[INIT] Processing project URL parameter:', projectUuid);
         var projectCard = document.querySelector('.project-card[data-project-uuid="' + projectUuid + '"]');
         if (projectCard) {
