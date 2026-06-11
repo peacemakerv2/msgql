@@ -110,13 +110,7 @@ if (!empty($search_query) && !empty($current_user_uuid)) {
     // ver.3.5 - Добавлена нормализация запроса для поиска вариантов (дефисы/пробелы)
     // Поиск по проектам с пагинацией
     $search_variants = normalize_search_query($search_query);
-    $like_conditions = [];
-    
-    foreach ($search_variants as $variant) {
-        $escaped = $db->real_escape_string($variant);
-        $like_conditions[] = "(p.title LIKE '%{$escaped}%' OR p.descr LIKE '%{$escaped}%')";
-    }
-    $combined_like = '(' . implode(' OR ', $like_conditions) . ')';
+    $combined_like = build_like_condition('CONCAT(COALESCE(p.title,""), " ", COALESCE(p.descr,""))', $search_variants, $db);
     
     if ($is_admin) {
         // Получаем общее количество
@@ -180,17 +174,10 @@ if (!empty($search_query) && !empty($current_user_uuid)) {
         // ==================== BLOCK START: Search Tasks with Pagination v3.5 ====================
     // ver.3.5 - Добавлена нормализация запроса для поиска вариантов (дефисы/пробелы)
     // Формируем условия для поиска по задачам
-    $task_like_conditions = [];
-    foreach ($search_variants as $variant) {
-        $escaped = $db->real_escape_string($variant);
-        $task_like_conditions[] = "(t.title LIKE '%{$escaped}%' 
-                                   OR t.descr LIKE '%{$escaped}%' 
-                                   OR assignee.name LIKE '%{$escaped}%' 
-                                   OR assignee.login LIKE '%{$escaped}%'
-                                   OR creator.name LIKE '%{$escaped}%' 
-                                   OR creator.login LIKE '%{$escaped}%')";
-    }
-    $task_combined_like = '(' . implode(' OR ', $task_like_conditions) . ')';
+    $task_search_fields = "CONCAT(COALESCE(t.title,''), ' ', COALESCE(t.descr,''), ' ', 
+                                  COALESCE(assignee.name,''), ' ', COALESCE(assignee.login,''), ' ',
+                                  COALESCE(creator.name,''), ' ', COALESCE(creator.login,''))";
+    $task_combined_like = build_like_condition($task_search_fields, $search_variants, $db);
     
     if ($is_admin) {
         $count_sql = "SELECT COUNT(*) as total 
@@ -263,12 +250,7 @@ if (!empty($search_query) && !empty($current_user_uuid)) {
     
         // ==================== BLOCK START: Search Messages with Pagination v3.5 ====================
     // ver.3.5 - Добавлена нормализация запроса для поиска вариантов (дефисы/пробелы)
-    $message_like_conditions = [];
-    foreach ($search_variants as $variant) {
-        $escaped = $db->real_escape_string($variant);
-        $message_like_conditions[] = "m.text LIKE '%{$escaped}%'";
-    }
-    $message_combined_like = '(' . implode(' OR ', $message_like_conditions) . ')';
+    $message_combined_like = build_like_condition('m.text', $search_variants, $db);
     
     if ($is_admin) {
         $count_sql = "SELECT COUNT(*) as total 
@@ -338,12 +320,7 @@ if (!empty($search_query) && !empty($current_user_uuid)) {
     
         // ==================== BLOCK START: Search Files with Pagination v3.5 ====================
     // ver.3.5 - Добавлена нормализация запроса для поиска вариантов (дефисы/пробелы)
-    $file_like_conditions = [];
-    foreach ($search_variants as $variant) {
-        $escaped = $db->real_escape_string($variant);
-        $file_like_conditions[] = "f.orig_name LIKE '%{$escaped}%'";
-    }
-    $file_combined_like = '(' . implode(' OR ', $file_like_conditions) . ')';
+    $file_combined_like = build_like_condition('f.orig_name', $search_variants, $db);
     
     if ($is_admin) {
         $count_sql = "SELECT COUNT(*) as total 
@@ -373,12 +350,7 @@ if (!empty($search_query) && !empty($current_user_uuid)) {
         $stmt->bind_param("ii", $per_page, $offset);
         
         // Добавляем файлы-призраки (без привязки) - отдельный запрос с пагинацией
-        $orphan_like_conditions = [];
-        foreach ($search_variants as $variant) {
-            $escaped = $db->real_escape_string($variant);
-            $orphan_like_conditions[] = "f.orig_name LIKE '%{$escaped}%'";
-        }
-        $orphan_combined_like = '(' . implode(' OR ', $orphan_like_conditions) . ')';
+        $orphan_combined_like = build_like_condition('f.orig_name', $search_variants, $db);
         
         $orphan_count_sql = "SELECT COUNT(*) as total 
                              FROM files f
@@ -481,50 +453,58 @@ function format_file_size($bytes) {
     return $bytes . ' B';
 }
 
-// ==================== BLOCK START: highlight_text function with variants v3.5 ====================
+// ==================== BLOCK START: highlight_text v3.6 (simple) ====================
 /**
- * Подсвечивает все варианты поискового запроса в тексте
- * ver.3.5 - Добавлена поддержка подсветки нескольких вариантов запроса
- * 
- * @param string $text Исходный текст
- * @param string $query Исходный поисковый запрос
- * @return string Текст с подсвеченными вхождениями
+ * Подсвечивает ключевые слова в тексте
  */
 function highlight_text($text, $query) {
     if (empty($query) || empty($text)) {
         return htmlspecialchars($text);
     }
     
-    // Генерируем варианты запроса для подсветки
     $variants = normalize_search_query($query);
     
-    // Сортируем варианты по длине (от длинных к коротким) для корректной подсветки
-    usort($variants, function($a, $b) {
+    // Собираем все ключевые слова
+    $all_keywords = [];
+    foreach ($variants as $variant) {
+        if (strpos($variant, 'SMART_ALL:') === 0) {
+            $keywords = explode('|', substr($variant, 10));
+            $all_keywords = array_merge($all_keywords, $keywords);
+        } elseif (strpos($variant, 'SMART_ANY:') === 0) {
+            $keywords = explode('|', substr($variant, 10));
+            $all_keywords = array_merge($all_keywords, $keywords);
+        } elseif (strlen($variant) >= 3 && strpos($variant, 'SMART_') !== 0) {
+            $all_keywords[] = $variant;
+        }
+    }
+    
+    $all_keywords = array_unique($all_keywords);
+    usort($all_keywords, function($a, $b) {
         return strlen($b) - strlen($a);
     });
     
     $escaped_text = htmlspecialchars($text);
     
-    foreach ($variants as $variant) {
-        if (empty($variant)) {
-            continue;
-        }
-        $pattern = '/' . preg_quote($variant, '/') . '/iu';
+    foreach ($all_keywords as $keyword) {
+        if (strlen($keyword) < 2) continue;
+        $pattern = '/' . preg_quote($keyword, '/') . '/iu';
         $escaped_text = preg_replace($pattern, '<mark style="background:#4f7cff40; padding:0 2px; border-radius:3px;">$0</mark>', $escaped_text);
     }
     
     return $escaped_text;
 }
-// ==================== BLOCK END: highlight_text function with variants v3.5 ====================
+// ==================== BLOCK END: highlight_text v3.6 ====================
 
 
-// ==================== BLOCK START: Search Query Normalization v3.5 ====================
+// ==================== BLOCK START: Search Query Normalization v3.6 (NO STOP WORDS) ====================
 /**
  * Нормализует поисковый запрос и генерирует варианты для поиска
- * ver.3.5 - Добавлена поддержка поиска вариантов с дефисами/пробелами/слитным написанием
+ * ver.3.6 - Умный поиск БЕЗ стоп-слов (работает на любом языке)
+ *          - Разбиение на ключевые слова (все слова важны)
+ *          - Поиск по маске с игнорированием порядка слов
  * 
  * @param string $query Исходный поисковый запрос
- * @return array Массив вариантов запроса для поиска (оригинал + нормализованные варианты)
+ * @return array Массив вариантов запроса для поиска
  */
 function normalize_search_query($query) {
     if (empty($query)) {
@@ -537,17 +517,49 @@ function normalize_search_query($query) {
     
     log_debug('[SEARCH_NORM] Original query: ' . $original);
     
-    // Шаг 1: Удаляем лишние пробелы и приводим к нижнему регистру
+    // Шаг 1: Приводим к нижнему регистру
     $normalized = mb_strtolower($original, 'UTF-8');
     $normalized = preg_replace('/\s+/u', ' ', $normalized);
     $normalized = trim($normalized);
     
-    // Шаг 2: Удаляем знаки препинания (кроме дефиса и пробела, их обработаем отдельно)
-    // Сохраняем буквы, цифры, дефис и пробел
+    // Шаг 2: Удаляем знаки препинания, но сохраняем буквы, цифры, пробелы, дефисы
     $cleaned = preg_replace('/[^\p{L}\p{N}\s-]/u', '', $normalized);
-    log_debug('[SEARCH_NORM] After punctuation removal: ' . $cleaned);
+    log_debug('[SEARCH_NORM] Cleaned: ' . $cleaned);
     
-    // Шаг 3: Генерируем варианты для каждого слова в запросе
+    // Шаг 3: Разбиваем на ВСЕ слова (без удаления)
+    $all_words = preg_split('/\s+/u', $cleaned);
+    $filtered_words = [];
+    foreach ($all_words as $word) {
+        $word = trim($word);
+        if (strlen($word) >= 2) { // только слова длиной 2+ символа
+            $filtered_words[] = $word;
+        }
+    }
+    
+    log_debug('[SEARCH_NORM] All keywords: ' . implode(', ', $filtered_words));
+    
+    // Вариант 1: ВСЕ ключевые слова (порядок не важен)
+    if (count($filtered_words) >= 2) {
+        $variants[] = 'SMART_ALL:' . implode('|', $filtered_words);
+        log_debug('[SEARCH_NORM] Added SMART_ALL with ' . count($filtered_words) . ' keywords');
+    }
+    
+    // Вариант 2: ЛЮБОЕ из ключевых слов (хотя бы одно)
+    if (count($filtered_words) >= 1) {
+        $variants[] = 'SMART_ANY:' . implode('|', $filtered_words);
+        log_debug('[SEARCH_NORM] Added SMART_ANY with ' . count($filtered_words) . ' keywords');
+    }
+    
+    // Вариант 3: Перестановки слов для поиска фраз (только для 2-4 слов)
+    if (count($filtered_words) >= 2 && count($filtered_words) <= 4) {
+        $permutations = generate_word_permutations($filtered_words, 8);
+        foreach ($permutations as $perm) {
+            $variants[] = implode(' ', $perm);
+        }
+        log_debug('[SEARCH_NORM] Added ' . count($permutations) . ' permutations');
+    }
+    
+    // Вариант 4: Обработка дефисов и пробелов
     $words = preg_split('/\s+/u', $cleaned);
     $word_variants = [];
     
@@ -558,31 +570,24 @@ function normalize_search_query($query) {
             continue;
         }
         
-        $variants_for_word = [];
-        $variants_for_word[] = $word; // исходное слово
+        $variants_for_word = [$word];
         
-        // Если в слове есть дефис - добавляем вариант без дефиса и с пробелом
+        // Дефис -> пробел и наоборот
         if (strpos($word, '-') !== false) {
-            $without_hyphen = str_replace('-', '', $word);
-            $variants_for_word[] = $without_hyphen;
-            $with_space = str_replace('-', ' ', $word);
-            $variants_for_word[] = $with_space;
-            log_debug('[SEARCH_NORM] Word with hyphen: ' . $word . ' -> without: ' . $without_hyphen . ', with space: ' . $with_space);
+            $variants_for_word[] = str_replace('-', '', $word);
+            $variants_for_word[] = str_replace('-', ' ', $word);
         }
         
-        // Если в слове есть пробел (уже разделено, но на всякий случай)
+        // Пробел -> дефис и слитно
         if (strpos($word, ' ') !== false) {
-            $without_space = str_replace(' ', '', $word);
-            $variants_for_word[] = $without_space;
-            $with_hyphen = str_replace(' ', '-', $word);
-            $variants_for_word[] = $with_hyphen;
-            log_debug('[SEARCH_NORM] Word with space: ' . $word . ' -> without: ' . $without_space . ', with hyphen: ' . $with_hyphen);
+            $variants_for_word[] = str_replace(' ', '', $word);
+            $variants_for_word[] = str_replace(' ', '-', $word);
         }
         
         $word_variants[] = $variants_for_word;
     }
     
-    // Шаг 4: Комбинируем варианты слов в варианты фраз
+    // Комбинируем
     $combined_variants = [''];
     foreach ($word_variants as $word_opts) {
         $new_combined = [];
@@ -595,32 +600,50 @@ function normalize_search_query($query) {
         $combined_variants = $new_combined;
     }
     
-    // Добавляем все сгенерированные варианты к результату
     foreach ($combined_variants as $variant) {
         $variant = trim($variant);
-        if (!empty($variant) && !in_array($variant, $variants)) {
+        if (!empty($variant) && !in_array($variant, $variants) && strpos($variant, 'SMART_') !== 0) {
             $variants[] = $variant;
         }
     }
     
-    // Также добавляем вариант с удалением всех дефисов и пробелов (слитное написание)
+    // Слитное написание
     $joined = str_replace(['-', ' '], '', $cleaned);
-    if (!empty($joined) && !in_array($joined, $variants)) {
+    if (!empty($joined) && !in_array($joined, $variants) && strpos($joined, 'SMART_') !== 0) {
         $variants[] = $joined;
     }
     
-    log_debug('[SEARCH_NORM] Total variants: ' . count($variants) . ' - ' . implode(' | ', $variants));
+    log_debug('[SEARCH_NORM] Total variants: ' . count($variants));
     
     return $variants;
 }
 
 /**
- * Формирует SQL условие LIKE для поиска по нескольким вариантам запроса
- * 
- * @param string $column Имя колонки для поиска
- * @param array $variants Массив вариантов поискового запроса
- * @param mysqli $db Объект подключения к БД
- * @return string SQL условие для WHERE
+ * Генерирует перестановки слов (упрощенная версия)
+ */
+function generate_word_permutations($words, $max = 8) {
+    if (count($words) <= 1) return [$words];
+    
+    $result = [];
+    $result[] = $words; // исходный порядок
+    
+    if (count($words) == 2) {
+        $result[] = [$words[1], $words[0]];
+    } elseif (count($words) == 3) {
+        $result[] = [$words[1], $words[0], $words[2]];
+        $result[] = [$words[0], $words[2], $words[1]];
+        $result[] = [$words[2], $words[1], $words[0]];
+        $result[] = [$words[2], $words[0], $words[1]];
+        $result[] = [$words[1], $words[2], $words[0]];
+        if (count($result) > $max) $result = array_slice($result, 0, $max);
+    }
+    
+    return $result;
+}
+
+/**
+ * Формирует SQL условие для "умного поиска"
+ * ver.3.6 - Поддержка поиска по ключевым словам (без стоп-слов)
  */
 function build_like_condition($column, $variants, $db) {
     if (empty($variants)) {
@@ -628,14 +651,72 @@ function build_like_condition($column, $variants, $db) {
     }
     
     $conditions = [];
+    $smart_all_conditions = [];
+    $smart_any_conditions = [];
+    
     foreach ($variants as $variant) {
+        // Умный поиск: должны быть ВСЕ слова
+        if (strpos($variant, 'SMART_ALL:') === 0) {
+            $keywords = explode('|', substr($variant, 10));
+            if (count($keywords) >= 2) {
+                $kw_conditions = [];
+                foreach ($keywords as $kw) {
+                    $escaped = $db->real_escape_string($kw);
+                    // 🔥 ФИКС: ищем как с дефисом, так и без
+                    $kw_normalized = str_replace('-', ' ', $kw);
+                    $escaped_normalized = $db->real_escape_string($kw_normalized);
+                    $kw_conditions[] = "({$column} LIKE '%{$escaped}%' OR {$column} LIKE '%{$escaped_normalized}%')";
+                }
+                $smart_all_conditions[] = '(' . implode(' AND ', $kw_conditions) . ')';
+            }
+            continue;
+        }
+        
+        // Умный поиск: хотя бы ОДНО слово
+        if (strpos($variant, 'SMART_ANY:') === 0) {
+            $keywords = explode('|', substr($variant, 10));
+            if (count($keywords) >= 1) {
+                $kw_conditions = [];
+                foreach ($keywords as $kw) {
+                    $escaped = $db->real_escape_string($kw);
+                    // 🔥 ФИКС: ищем как с дефисом, так и без
+                    $kw_normalized = str_replace('-', ' ', $kw);
+                    $escaped_normalized = $db->real_escape_string($kw_normalized);
+                    $kw_conditions[] = "({$column} LIKE '%{$escaped}%' OR {$column} LIKE '%{$escaped_normalized}%')";
+                }
+                $smart_any_conditions[] = '(' . implode(' OR ', $kw_conditions) . ')';
+            }
+            continue;
+        }
+        
+        // Обычный поиск (точные фразы)
         $escaped = $db->real_escape_string($variant);
-        $conditions[] = "{$column} LIKE '%{$escaped}%'";
+        if (strlen($variant) >= 2) {
+            $conditions[] = "{$column} LIKE '%{$escaped}%'";
+        }
     }
     
-    return '(' . implode(' OR ', $conditions) . ')';
+    $all_parts = [];
+    
+    if (!empty($conditions)) {
+        $all_parts[] = '(' . implode(' OR ', $conditions) . ')';
+    }
+    
+    if (!empty($smart_all_conditions)) {
+        $all_parts[] = '(' . implode(' OR ', $smart_all_conditions) . ')';
+    }
+    
+    if (!empty($smart_any_conditions)) {
+        $all_parts[] = '(' . implode(' OR ', $smart_any_conditions) . ')';
+    }
+    
+    if (empty($all_parts)) {
+        return '1=0';
+    }
+    
+    return '(' . implode(' OR ', $all_parts) . ')';
 }
-// ==================== BLOCK END: Search Query Normalization v3.5 ====================
+// ==================== BLOCK END: Search Query Normalization v3.6 ====================
 
 
 // ==================== BLOCK START: Pagination HTML Functions v3.5 (with loading indicator) ====================
