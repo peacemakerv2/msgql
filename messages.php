@@ -1649,31 +1649,130 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
-        // ========== GET TASK INFO ==========
+        // ==================== BLOCK START: ajax_get_task_info v5.2 (with files) ====================
+        // ver.5.1 (2026-06-10) - Базовая версия с parent_chain
+        // ver.5.2 (2026-06-11) - ДОБАВЛЕНА ЗАГРУЗКА ФАЙЛОВ ЗАДАЧИ
         } elseif ($action === 'get_task_info') {
             $task_uuid = $_POST['task_uuid'] ?? '';
+            
+            log_debug("[GET_TASK_INFO] v5.2 Called for task_uuid: {$task_uuid}");
             
             if (empty($task_uuid)) {
                 $response['error'] = 'Не указана задача';
             } else {
-                $task_check = $db->prepare("SELECT uuid, title, project_uuid FROM tasks WHERE uuid = ?");
+                // Получаем полную информацию о задаче и проекте
+                $task_check = $db->prepare("
+                    SELECT t.uuid, t.project_uuid, t.parent_task_uuid, t.title,
+                           p.created_by_uuid as project_created_by
+                    FROM tasks t
+                    JOIN projects p ON t.project_uuid = p.uuid
+                    WHERE t.uuid = ?
+                ");
                 $task_check->bind_param("s", $task_uuid);
                 $task_check->execute();
-                $task_info = $task_check->get_result()->fetch_assoc();
+                $task_info_db = $task_check->get_result()->fetch_assoc();
                 $task_check->close();
                 
-                if (!$task_info) {
+                if (!$task_info_db) {
                     $response['error'] = 'Задача не найдена';
-                } elseif (!msgql_can_access_task($current_user_uuid, $task_uuid, 'view')) {
-                    $response['error'] = 'Нет доступа к задаче';
+                    log_warning("[GET_TASK_INFO] Task not found: {$task_uuid}");
                 } else {
-                    $response['success'] = true;
-                    $response['task'] = $task_info;
+                    $project_uuid = $task_info_db['project_uuid'];
+                    $direct_parent = $task_info_db['parent_task_uuid'];
+                    
+                    log_debug("[GET_TASK_INFO] Task belongs to project: {$project_uuid}, direct_parent: " . ($direct_parent ?: 'NULL'));
+                    
+                    // Проверяем доступ к проекту
+                    if (!msgql_can_access_project($current_user_uuid, $project_uuid, 'view')) {
+                        $response['error'] = 'Нет доступа к проекту задачи';
+                        log_warning("[GET_TASK_INFO] Access denied to project: {$project_uuid}");
+                    } else {
+                        $task = get_task_data($task_uuid, $current_user_uuid, $db);
+                        if ($task) {
+                            // ========== v5.1: ПОСТРОЕНИЕ parent_chain через рекурсивный CTE ==========
+                            $parent_chain = [];
+                            
+                            if (!empty($direct_parent)) {
+                                log_debug("[GET_TASK_INFO] Building parent chain using recursive CTE starting from: {$direct_parent}");
+                                
+                                $cte_sql = "
+                                    WITH RECURSIVE task_parents AS (
+                                        SELECT uuid, parent_task_uuid, title, 1 as level
+                                        FROM tasks
+                                        WHERE uuid = ?
+                                        UNION ALL
+                                        SELECT t.uuid, t.parent_task_uuid, t.title, tp.level + 1
+                                        FROM tasks t
+                                        INNER JOIN task_parents tp ON t.uuid = tp.parent_task_uuid
+                                        WHERE tp.parent_task_uuid IS NOT NULL AND tp.level < 50
+                                    )
+                                    SELECT uuid FROM task_parents ORDER BY level DESC
+                                ";
+                                
+                                $cte_stmt = $db->prepare($cte_sql);
+                                if ($cte_stmt) {
+                                    $cte_stmt->bind_param("s", $direct_parent);
+                                    $cte_stmt->execute();
+                                    $parents_result = $cte_stmt->get_result();
+                                    
+                                    while ($row = $parents_result->fetch_assoc()) {
+                                        $parent_chain[] = $row['uuid'];
+                                        log_debug("[GET_TASK_INFO] CTE found parent: " . $row['uuid']);
+                                    }
+                                    $cte_stmt->close();
+                                } else {
+                                    log_warning("[GET_TASK_INFO] CTE not supported, using iterative fallback");
+                                    $current_parent = $direct_parent;
+                                    $fallback_stmt = $db->prepare("SELECT parent_task_uuid FROM tasks WHERE uuid = ?");
+                                    $fallback_depth = 0;
+                                    $fallback_max = 50;
+                                    
+                                    while ($current_parent && $fallback_depth < $fallback_max) {
+                                        log_debug("[GET_TASK_INFO] Fallback adding parent: {$current_parent}");
+                                        array_unshift($parent_chain, $current_parent);
+                                        
+                                        $fallback_stmt->bind_param("s", $current_parent);
+                                        $fallback_stmt->execute();
+                                        $fallback_row = $fallback_stmt->get_result()->fetch_assoc();
+                                        
+                                        if ($fallback_row && !empty($fallback_row['parent_task_uuid'])) {
+                                            $current_parent = $fallback_row['parent_task_uuid'];
+                                        } else {
+                                            $current_parent = null;
+                                        }
+                                        $fallback_depth++;
+                                    }
+                                    $fallback_stmt->close();
+                                }
+                                
+                                log_debug("[GET_TASK_INFO] Final parent_chain (" . count($parent_chain) . " items): " . json_encode($parent_chain));
+                            } else {
+                                log_debug("[GET_TASK_INFO] Task is root (no parent)");
+                            }
+                            
+                            // ========== v5.2: ЗАГРУЖАЕМ ФАЙЛЫ ЗАДАЧИ ==========
+                            $task_files = get_task_files($task_uuid, $db);
+                            log_debug("[GET_TASK_INFO] Found " . count($task_files) . " files for task: {$task_uuid}");
+                            
+                            $response['success'] = true;
+                            $response['task'] = $task;
+                            $response['task']['files'] = $task_files;  // ДОБАВЛЯЕМ ФАЙЛЫ
+                            $response['task']['parent_chain'] = $parent_chain;
+                            $response['task']['project_uuid'] = $task['project_uuid'];
+                            $response['task']['direct_parent_uuid'] = $direct_parent;
+                        } else {
+                            $response['error'] = 'Задача не найдена или нет доступа';
+                            log_warning("[GET_TASK_INFO] Task data not accessible: {$task_uuid}");
+                        }
+                    }
                 }
             }
+        }
+        // ==================== BLOCK END: ajax_get_task_info v5.2 ====================
+
 
         // ========== GET TASK USERS ==========
-        } elseif ($action === 'get_task_users') {
+        elseif ($action === 'get_task_users') {
             $task_uuid = $_POST['task_uuid'] ?? '';
             if (empty($task_uuid)) {
                 $response['users'] = [];
@@ -3490,6 +3589,12 @@ window.currentUserIsAdmin = <?= $is_admin ? 'true' : 'false' ?>;
 window.currentTaskUuid = '<?= $selected_task_uuid ?>';
 window.lastMessageTime = <?= (int)$lastMessageTime ?>;
 window.MESSAGES_PER_PAGE = <?= (int)$per_page ?>;
+
+// ==================== BLOCK START: Global task details variables v1.0 ====================
+// ver.1.0 (2026-06-11) - Глобальные переменные для панели деталей задачи
+window.taskDetailsPanelOpen = false;
+window.currentTaskDetailsUuid = null;
+// ==================== BLOCK END: Global task details variables v1.0 ====================
 
 logDebug('[INIT] currentUserIsAdmin:', window.currentUserIsAdmin);
 
@@ -9210,7 +9315,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="messenger-chat">
             <div class="chat-header">
                 <h3 id="chat-title-wrapper" style="margin: 0 0 4px 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-                    <a href="#" id="chat-title" target="_self" style="text-decoration: none; border-bottom: 1px dashed #4f7cff;">Выберите задачу</a>
+                    <a href="#" id="chat-title" target="_self" style="text-decoration: none; border-bottom: 1px dashed #70a0ff; cursor: pointer;" title="Нажмите для просмотра описания и файлов задачи">Выберите задачу</a>
                     <a href="#" id="task-files-link" style="display: none; background: rgba(79,124,255,0.12); padding: 4px 12px; border-radius: 20px; font-size: 12px; color: #4f7cff; text-decoration: none; transition: all 0.2s;" target="_blank">📎 Все файлы задачи</a>
                 </h3>
                 <div class="task-info" id="chat-subtitle">Нажмите на проект и задачу</div>
@@ -10222,7 +10327,690 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
         padding-bottom: 100px !important;
     }
 }
+
+/* ==================== BLOCK START: Task details panel styles v1.0 ==================== */
+/* ver.1.0 (2026-06-11) - Стили для немодальной панели деталей задачи */
+
+.task-details-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 400px;
+    max-width: 85vw;
+    height: 100vh;
+    background: #1a1a2e;
+    border-right: 1px solid #2c2c3e;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
+    z-index: 2000;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.task-details-panel.open {
+    transform: translateX(0);
+}
+
+/* На мобильных устройствах панель поверх чата */
+@media (max-width: 768px) {
+    .task-details-panel {
+        width: 100%;
+        max-width: 100%;
+        z-index: 2100;
+        transform: translateX(-100%);
+    }
+    
+    .task-details-panel.open {
+        transform: translateX(0);
+    }
+}
+
+.task-details-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+}
+
+.task-details-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.task-details-header {
+    padding: 16px 20px;
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border-bottom: 1px solid rgba(79, 124, 255, 0.3);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.task-details-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #e9eefc;
+    font-weight: 600;
+    word-break: break-word;
+    flex: 1;
+}
+
+.task-details-close {
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #9ca3af;
+    font-size: 20px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    margin-left: 12px;
+    flex-shrink: 0;
+}
+
+.task-details-close:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+}
+
+.task-details-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+.task-details-field {
+    margin-bottom: 20px;
+}
+
+.task-details-field-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #6b7280;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.task-details-field-value {
+    font-size: 14px;
+    color: #e9eefc;
+    word-break: break-word;
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+
+.task-details-description {
+    background: #0f172a;
+    border-radius: 12px;
+    padding: 14px;
+    border-left: 3px solid #4f7cff;
+    margin-top: 8px;
+}
+
+.task-details-description-empty {
+    color: #6b7280;
+    font-style: italic;
+}
+
+.task-details-files-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #9bb7ff;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.task-details-files-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.task-details-file-item {
+    background: #1e293b;
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #e9eefc;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: 1px solid #334155;
+}
+
+.task-details-file-item:hover {
+    background: #2d3a5e;
+    transform: scale(1.02);
+}
+
+.task-details-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    flex-wrap: wrap;
+}
+
+.task-details-btn-primary {
+    background: #4f7cff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 10px;
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+}
+
+.task-details-btn-primary:hover {
+    background: #3b6ef5;
+    transform: translateY(-1px);
+}
+
+.task-details-btn-secondary {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 10px 20px;
+    border-radius: 10px;
+    color: #e9eefc;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.task-details-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.task-details-loading {
+    text-align: center;
+    padding: 40px;
+    color: #6b7280;
+}
+
+.task-details-error {
+    text-align: center;
+    padding: 40px;
+    color: #f87171;
+}
+
+/* Для ссылок внутри описания */
+.task-details-field-value .external-link {
+    display: inline-block;
+    background: rgba(79, 124, 255, 0.15);
+    padding: 2px 8px;
+    border-radius: 16px;
+    font-size: 12px;
+    text-decoration: none;
+    margin: 2px;
+    border-left: 2px solid #f59e0b;
+    color: #f59e0b;
+    word-break: break-all;
+}
+
+.task-details-field-value .external-link:hover {
+    background: rgba(79, 124, 255, 0.3);
+    text-decoration: none;
+}
+
+/* ==================== BLOCK END: Task details panel styles v1.0 ==================== */
 </style>
 
+
+<!-- ==================== BLOCK START: Task details panel v1.0 ==================== -->
+<!-- ver.1.0 (2026-06-11) - Немодальная панель с деталями задачи -->
+
+<div id="taskDetailsOverlay" class="task-details-overlay"></div>
+<div id="taskDetailsPanel" class="task-details-panel">
+    <div class="task-details-header">
+        <h3 id="taskDetailsTitle">📋 Информация о задаче</h3>
+        <button class="task-details-close" id="taskDetailsCloseBtn">✕</button>
+    </div>
+    <div class="task-details-body" id="taskDetailsBody">
+        <div class="task-details-loading">⏳ Загрузка информации о задаче...</div>
+    </div>
+</div>
+
+<script nonce="<?= CSP_NONCE ?>">
+// ==================== BLOCK START: Task details panel functionality v1.2 ====================
+// ver.1.0 (2026-06-11) - Базовая реализация панели деталей задачи
+// ver.1.1 (2026-06-11) - Добавлена функция parseDescriptionLinks для ссылок в описании
+// ver.1.2 (2026-06-11) - Исправлено форматирование дат (используется formatDate из глобальной области)
+
+// Функция для парсинга ссылок в описании (аналог parseDescriptionLinks из projects.php)
+function parseTaskDetailsLinks(text) {
+    if (!text) return '';
+    
+    // Экранируем HTML
+    var div = document.createElement('div');
+    div.textContent = text;
+    var escaped = div.innerHTML;
+    
+    // URL regex
+    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
+    
+    escaped = escaped.replace(urlRegex, function(match) {
+        var lowerMatch = match.toLowerCase();
+        // Блокируем опасные схемы
+        if (lowerMatch.indexOf('javascript:') === 0 || 
+            lowerMatch.indexOf('data:') === 0 || 
+            lowerMatch.indexOf('vbscript:') === 0) {
+            logDebug('[TASK_DETAILS] Blocked dangerous URL: ' + match.substring(0, 100));
+            return match;
+        }
+        
+        var safeUrl = match.replace(/['"]/g, '').replace(/[<>]/g, '');
+        var isTelegram = lowerMatch.indexOf('tg://') === 0 || lowerMatch.indexOf('telegram://') === 0;
+        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
+        var targetAttr = (lowerMatch.indexOf('mailto:') === 0 || lowerMatch.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        
+        var displayText = match;
+        if (displayText.length > 80) {
+            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
+        }
+        
+        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + displayText + '</a>';
+    });
+    
+    // Преобразуем переносы строк в <br>
+    escaped = escaped.replace(/\n/g, '<br>');
+    
+    return escaped;
+}
+
+// Глобальная переменная для хранения состояния панели
+var taskDetailsPanel = {
+    isOpen: false,
+    currentTaskUuid: null,
+    isLoading: false
+};
+
+// Функция для форматирования даты (использует глобальную formatDate если доступна)
+function formatTaskDate(ts) {
+    if (!ts || ts === null || ts === 0) return '';
+    var d = new Date(parseInt(ts));
+    if (isNaN(d.getTime())) return '';
+    var tz = -d.getTimezoneOffset() / 60;
+    var tzName = tz === 3 ? 'MSK' : ((tz >= 0 ? '+' : '') + tz);
+    return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) + ' (' + tzName + ')';
+}
+
+// Функция загрузки деталей задачи
+function loadTaskDetails(taskUuid) {
+    if (!taskUuid) {
+        logDebug('[TASK_DETAILS] No task UUID provided');
+        return;
+    }
+    
+    if (taskDetailsPanel.isLoading) {
+        logDebug('[TASK_DETAILS] Already loading, skipping');
+        return;
+    }
+    
+    taskDetailsPanel.isLoading = true;
+    taskDetailsPanel.currentTaskUuid = taskUuid;
+    
+    var bodyContainer = document.getElementById('taskDetailsBody');
+    if (bodyContainer) {
+        bodyContainer.innerHTML = '<div class="task-details-loading">⏳ Загрузка информации о задаче...</div>';
+    }
+    
+    logDebug('[TASK_DETAILS] Loading details for task:', taskUuid);
+    
+    var formData = new URLSearchParams();
+    formData.append('action', 'get_task_info');
+    formData.append('task_uuid', taskUuid);
+    formData.append('ajax_mode', '1');
+    if (typeof addCsrfToUrlParams === 'function') {
+        addCsrfToUrlParams(formData);
+    }
+    
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', window.APP_BASE + '/projects.php', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.timeout = 30000;
+    
+    xhr.onload = function() {
+        taskDetailsPanel.isLoading = false;
+        
+        if (xhr.status === 200) {
+            try {
+                var data = JSON.parse(xhr.responseText);
+                logDebug('[TASK_DETAILS] Response received, success:', data.success);
+                
+                if (data.success && data.task) {
+                    renderTaskDetails(data.task);
+                } else {
+                    if (bodyContainer) {
+                        bodyContainer.innerHTML = '<div class="task-details-error">❌ ' + escapeHtml(data.error || 'Задача не найдена') + '</div>';
+                    }
+                    logDebug('[TASK_DETAILS] Task not found or error:', data.error);
+                }
+            } catch(e) {
+                logDebug('[TASK_DETAILS] JSON parse error:', e.message);
+                if (bodyContainer) {
+                    bodyContainer.innerHTML = '<div class="task-details-error">❌ Ошибка обработки ответа сервера</div>';
+                }
+            }
+        } else {
+            logDebug('[TASK_DETAILS] HTTP error:', xhr.status);
+            if (bodyContainer) {
+                bodyContainer.innerHTML = '<div class="task-details-error">❌ Ошибка загрузки (HTTP ' + xhr.status + ')</div>';
+            }
+        }
+    };
+    
+    xhr.onerror = function() {
+        taskDetailsPanel.isLoading = false;
+        logDebug('[TASK_DETAILS] Network error');
+        if (bodyContainer) {
+            bodyContainer.innerHTML = '<div class="task-details-error">❌ Сетевая ошибка</div>';
+        }
+    };
+    
+    xhr.ontimeout = function() {
+        taskDetailsPanel.isLoading = false;
+        logDebug('[TASK_DETAILS] Timeout');
+        if (bodyContainer) {
+            bodyContainer.innerHTML = '<div class="task-details-error">❌ Превышено время ожидания</div>';
+        }
+    };
+    
+    xhr.send(formData);
+}
+
+// Функция рендеринга деталей задачи
+function renderTaskDetails(task) {
+    logDebug('[TASK_DETAILS] Rendering task details for:', task.uuid);
+    
+    var statusText = (task.status === 1) ? '✅ Выполнена' : '🟢 Активна';
+    var statusClass = (task.status === 1) ? 'completed' : '';
+    
+    var assigneeText = (task.assignee_name || task.assignee_login) ? 
+        escapeHtml(task.assignee_name || task.assignee_login) : 'Не назначен';
+    
+    var descrHtml = '';
+    var descrText = task.descr || '';
+    if (descrText.trim() !== '') {
+        var parsedDesc = parseTaskDetailsLinks(descrText);
+        descrHtml = '<div class="task-details-description">' + parsedDesc + '</div>';
+    } else {
+        descrHtml = '<div class="task-details-description-empty">Нет описания</div>';
+    }
+    
+    // Формируем HTML для файлов
+    var filesHtml = '';
+    var files = task.files || [];
+    if (files.length > 0) {
+        filesHtml = '<div class="task-details-files-title">📎 Прикреплённые файлы (' + files.length + ')</div>';
+        filesHtml += '<div class="task-details-files-list">';
+        for (var i = 0; i < files.length; i++) {
+            var file = files[i];
+            var fileIcon = getFileIconFromName(file.name);
+            var safeName = escapeHtml(file.name).replace(/'/g, "\\'");
+            filesHtml += '<div class="task-details-file-item" onclick="showFilePreview(\'' + 
+                escapeHtml(file.uuid) + '\', \'' + safeName + '\', ' + (file.size_bytes || 0) + ', \'' + 
+                escapeHtml(file.mime || '') + '\')" title="' + safeName + '">';
+            filesHtml += fileIcon + ' ' + escapeHtml(file.name) + ' (' + (file.size || formatFileSize(file.size_bytes || 0)) + ')';
+            filesHtml += '</div>';
+        }
+        filesHtml += '</div>';
+    } else {
+        filesHtml = '<div class="task-details-files-title">📎 Прикреплённые файлы</div>';
+        filesHtml += '<div class="task-details-description-empty">Нет прикреплённых файлов</div>';
+    }
+    
+    // Ссылка на задачу в projects.php
+    var taskUrl = window.location.origin + (window.APP_BASE || '') + '/projects.php?task=' + task.uuid;
+    
+    var html = '';
+    html += '<div class="task-details-field">';
+    html += '<div class="task-details-field-label">📋 Статус</div>';
+    html += '<div class="task-details-field-value ' + statusClass + '">' + statusText + '</div>';
+    html += '</div>';
+    
+    html += '<div class="task-details-field">';
+    html += '<div class="task-details-field-label">👤 Исполнитель</div>';
+    html += '<div class="task-details-field-value">' + assigneeText + '</div>';
+    html += '</div>';
+    
+    if (task.time_start) {
+        html += '<div class="task-details-field">';
+        html += '<div class="task-details-field-label">🚀 Дата начала</div>';
+        html += '<div class="task-details-field-value">' + formatTaskDate(task.time_start) + '</div>';
+        html += '</div>';
+    }
+    
+    if (task.time_end_plan) {
+        var isOverdue = false;
+        if (task.status !== 1 && task.time_end_plan) {
+            var deadlineDate = parseInt(task.time_end_plan);
+            isOverdue = deadlineDate < Date.now();
+        }
+        var overdueClass = isOverdue ? ' style="color: #f87171;"' : '';
+        html += '<div class="task-details-field">';
+        html += '<div class="task-details-field-label">📅 Плановое окончание</div>';
+        html += '<div class="task-details-field-value"' + overdueClass + '>' + formatTaskDate(task.time_end_plan);
+        if (isOverdue) html += ' ⚠️ Просрочено';
+        html += '</div></div>';
+    }
+    
+    html += '<div class="task-details-field">';
+    html += '<div class="task-details-field-label">📝 Описание</div>';
+    html += descrHtml;
+    html += '</div>';
+    
+    html += '<div class="task-details-field">';
+    html += filesHtml;
+    html += '</div>';
+    
+    html += '<div class="task-details-actions">';
+    html += '<a href="' + taskUrl + '" class="task-details-btn-primary" target="_blank" rel="noopener noreferrer">📋 Перейти к задаче</a>';
+    html += '<button class="task-details-btn-secondary" id="taskDetailsRefreshBtn">🔄 Обновить</button>';
+    html += '</div>';
+    
+    var bodyContainer = document.getElementById('taskDetailsBody');
+    if (bodyContainer) {
+        bodyContainer.innerHTML = html;
+        
+        // Обработчик кнопки обновления
+        var refreshBtn = document.getElementById('taskDetailsRefreshBtn');
+        if (refreshBtn) {
+            refreshBtn.onclick = function() {
+                if (taskDetailsPanel.currentTaskUuid) {
+                    loadTaskDetails(taskDetailsPanel.currentTaskUuid);
+                }
+            };
+        }
+    }
+    
+    logDebug('[TASK_DETAILS] Rendering complete');
+}
+
+// Вспомогательная функция для получения иконки файла
+function getFileIconFromName(filename) {
+    if (!filename) return '📎';
+    var ext = filename.split('.').pop().toLowerCase();
+    var icons = {
+        'jpg': '🖼️', 'jpeg': '🖼️', 'png': '🖼️', 'gif': '🖼️', 'webp': '🖼️',
+        'pdf': '📄', 'doc': '📝', 'docx': '📝', 'xls': '📊', 'xlsx': '📊',
+        'zip': '📦', 'rar': '📦', '7z': '📦', 'mp3': '🎵', 'mp4': '🎬',
+        'avi': '🎬', 'txt': '📃', 'md': '📃'
+    };
+    return icons[ext] || '📎';
+}
+
+// Функция открытия панели деталей задачи
+function openTaskDetailsPanel(taskUuid, taskTitle) {
+    logDebug('[TASK_DETAILS] Opening panel for task:', taskUuid, 'title:', taskTitle);
+    
+    if (!taskUuid) {
+        logDebug('[TASK_DETAILS] No task UUID provided');
+        return;
+    }
+    
+    var panel = document.getElementById('taskDetailsPanel');
+    var overlay = document.getElementById('taskDetailsOverlay');
+    var titleElement = document.getElementById('taskDetailsTitle');
+    
+    if (!panel || !overlay) {
+        logDebug('[TASK_DETAILS] Panel or overlay not found');
+        return;
+    }
+    
+    // Обновляем заголовок
+    if (titleElement) {
+        titleElement.innerHTML = '📋 ' + (taskTitle || 'Информация о задаче');
+    }
+    
+    // Загружаем данные
+    loadTaskDetails(taskUuid);
+    
+    // Открываем панель
+    panel.classList.add('open');
+    overlay.classList.add('open');
+    taskDetailsPanel.isOpen = true;
+    
+    // Блокируем скролл body на мобильных
+    if (window.innerWidth <= 768) {
+        document.body.style.overflow = 'hidden';
+    }
+}
+
+// Функция закрытия панели деталей задачи
+function closeTaskDetailsPanel() {
+    logDebug('[TASK_DETAILS] Closing panel');
+    
+    var panel = document.getElementById('taskDetailsPanel');
+    var overlay = document.getElementById('taskDetailsOverlay');
+    
+    if (panel) panel.classList.remove('open');
+    if (overlay) overlay.classList.remove('open');
+    
+    taskDetailsPanel.isOpen = false;
+    
+    // Восстанавливаем скролл body на мобильных
+    if (window.innerWidth <= 768) {
+        document.body.style.overflow = '';
+    }
+}
+
+// Обработчик клика на заголовок задачи
+function setupTaskTitleClickHandler() {
+    var chatTitle = document.getElementById('chat-title');
+    if (!chatTitle) {
+        logDebug('[TASK_DETAILS] chat-title element not found, will retry');
+        setTimeout(setupTaskTitleClickHandler, 500);
+        return;
+    }
+    
+    logDebug('[TASK_DETAILS] Setting up click handler for chat-title');
+    
+    // Сохраняем оригинальный href для использования в кнопке "Перейти к задаче"
+    var originalHref = chatTitle.getAttribute('href');
+    
+    // Заменяем поведение клика
+    chatTitle.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        var taskUuid = window.currentTaskUuid;
+        var taskTitle = this.textContent || 'Задача';
+        
+        logDebug('[TASK_DETAILS] Chat title clicked, taskUuid:', taskUuid);
+        
+        if (taskUuid) {
+            openTaskDetailsPanel(taskUuid, taskTitle);
+        } else {
+            logDebug('[TASK_DETAILS] No currentTaskUuid, falling back to navigation');
+            if (originalHref && originalHref !== '#') {
+                window.location.href = originalHref;
+            }
+        }
+    });
+    
+    // Меняем стиль курсора для индикации интерактивности
+    chatTitle.style.cursor = 'pointer';
+    chatTitle.style.borderBottom = '1px dashed #70a0ff';
+    
+    logDebug('[TASK_DETAILS] Click handler attached to chat-title');
+}
+
+// Обработчик закрытия панели
+function setupTaskDetailsCloseHandler() {
+    var closeBtn = document.getElementById('taskDetailsCloseBtn');
+    var overlay = document.getElementById('taskDetailsOverlay');
+    
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            closeTaskDetailsPanel();
+        });
+    }
+    
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            closeTaskDetailsPanel();
+        });
+    }
+    
+    // Закрытие по клавише Escape
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && taskDetailsPanel.isOpen) {
+            closeTaskDetailsPanel();
+        }
+    });
+}
+
+// Инициализация панели деталей задачи
+function initTaskDetailsPanel() {
+    logDebug('[TASK_DETAILS] Initializing panel');
+    
+    setupTaskTitleClickHandler();
+    setupTaskDetailsCloseHandler();
+    
+    logDebug('[TASK_DETAILS] Initialization complete');
+}
+
+// Запускаем инициализацию после загрузки DOM
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() {
+        initTaskDetailsPanel();
+    });
+} else {
+    initTaskDetailsPanel();
+}
+
+// ==================== BLOCK END: Task details panel functionality v1.2 ====================
+</script>
+<!-- ==================== BLOCK END: Task details panel v1.0 ==================== -->
 
 <?php require_once __DIR__ . '/layouts/page_end.php'; ?>
