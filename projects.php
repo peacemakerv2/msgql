@@ -1602,14 +1602,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
             }
         }
         
-        // ==================== BLOCK START: ajax_get_task_info v5.2 (with files) ====================
+        // ==================== BLOCK START: ajax_get_task_info v5.3 (with parent chain titles) ====================
         // ver.5.1 (2026-06-10) - Базовая версия с parent_chain
         // ver.5.2 (2026-06-11) - ДОБАВЛЕНА ЗАГРУЗКА ФАЙЛОВ ЗАДАЧИ
-
+        // ver.5.3 (2026-06-11) - ДОБАВЛЕНА ЗАГРУЗКА ДАННЫХ О РОДИТЕЛЬСКИХ ЗАДАЧАХ (title)
         elseif ($action === 'get_task_info') {
             $task_uuid = $_POST['task_uuid'] ?? '';
             
-            log_debug("[GET_TASK_INFO] v5.2 Called for task_uuid: {$task_uuid}");
+            log_debug("[GET_TASK_INFO] v5.3 Called for task_uuid: {$task_uuid}");
             
             if (empty($task_uuid)) {
                 $response['error'] = 'Не указана задача';
@@ -1649,7 +1649,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                             if (!empty($direct_parent)) {
                                 log_debug("[GET_TASK_INFO] Building parent chain using recursive CTE starting from: {$direct_parent}");
                                 
-                                // Используем рекурсивный CTE запрос для получения всех родителей
                                 $cte_sql = "
                                     WITH RECURSIVE task_parents AS (
                                         SELECT uuid, parent_task_uuid, title, 1 as level
@@ -1661,7 +1660,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                                         INNER JOIN task_parents tp ON t.uuid = tp.parent_task_uuid
                                         WHERE tp.parent_task_uuid IS NOT NULL AND tp.level < 50
                                     )
-                                    SELECT uuid FROM task_parents ORDER BY level DESC
+                                    SELECT uuid, title FROM task_parents ORDER BY level DESC
                                 ";
                                 
                                 $cte_stmt = $db->prepare($cte_sql);
@@ -1672,27 +1671,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                                     
                                     while ($row = $parents_result->fetch_assoc()) {
                                         $parent_chain[] = $row['uuid'];
-                                        log_debug("[GET_TASK_INFO] CTE found parent: " . $row['uuid']);
+                                        log_debug("[GET_TASK_INFO] CTE found parent: " . $row['uuid'] . " - " . $row['title']);
                                     }
                                     $cte_stmt->close();
                                 } else {
-                                    // Fallback: ручной обход (если CTE не поддерживается)
                                     log_warning("[GET_TASK_INFO] CTE not supported, using iterative fallback");
                                     $current_parent = $direct_parent;
-                                    $fallback_stmt = $db->prepare("SELECT parent_task_uuid FROM tasks WHERE uuid = ?");
+                                    $fallback_stmt = $db->prepare("SELECT parent_task_uuid, title FROM tasks WHERE uuid = ?");
                                     $fallback_depth = 0;
                                     $fallback_max = 50;
+                                    $parent_titles = [];
                                     
                                     while ($current_parent && $fallback_depth < $fallback_max) {
                                         log_debug("[GET_TASK_INFO] Fallback adding parent: {$current_parent}");
-                                        array_unshift($parent_chain, $current_parent);
-                                        
                                         $fallback_stmt->bind_param("s", $current_parent);
                                         $fallback_stmt->execute();
                                         $fallback_row = $fallback_stmt->get_result()->fetch_assoc();
                                         
-                                        if ($fallback_row && !empty($fallback_row['parent_task_uuid'])) {
-                                            $current_parent = $fallback_row['parent_task_uuid'];
+                                        if ($fallback_row) {
+                                            array_unshift($parent_chain, $current_parent);
+                                            $parent_titles[$current_parent] = $fallback_row['title'] ?? 'Задача';
+                                            
+                                            if (!empty($fallback_row['parent_task_uuid'])) {
+                                                $current_parent = $fallback_row['parent_task_uuid'];
+                                            } else {
+                                                $current_parent = null;
+                                            }
                                         } else {
                                             $current_parent = null;
                                         }
@@ -1706,14 +1710,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                                 log_debug("[GET_TASK_INFO] Task is root (no parent)");
                             }
                             
+                            // ========== v5.3: ЗАГРУЖАЕМ ДАННЫЕ О РОДИТЕЛЬСКИХ ЗАДАЧАХ ==========
+                            $parent_tasks_data = [];
+                            if (!empty($parent_chain)) {
+                                $placeholders = implode(',', array_fill(0, count($parent_chain), '?'));
+                                $parent_sql = "SELECT uuid, title, status FROM tasks WHERE uuid IN ($placeholders)";
+                                $parent_stmt = $db->prepare($parent_sql);
+                                $parent_stmt->bind_param(str_repeat('s', count($parent_chain)), ...$parent_chain);
+                                $parent_stmt->execute();
+                                $parents_result = $parent_stmt->get_result();
+                                while ($prow = $parents_result->fetch_assoc()) {
+                                    $parent_tasks_data[$prow['uuid']] = [
+                                        'uuid' => $prow['uuid'],
+                                        'title' => $prow['title'],
+                                        'status' => (int)$prow['status']
+                                    ];
+                                }
+                                $parent_stmt->close();
+                                log_debug("[GET_TASK_INFO] Loaded " . count($parent_tasks_data) . " parent tasks data");
+                            }
+                            
                             // ========== v5.2: ЗАГРУЖАЕМ ФАЙЛЫ ЗАДАЧИ ==========
                             $task_files = get_task_files($task_uuid, $db);
                             log_debug("[GET_TASK_INFO] Found " . count($task_files) . " files for task: {$task_uuid}");
                             
                             $response['success'] = true;
                             $response['task'] = $task;
-                            $response['task']['files'] = $task_files;  // ДОБАВЛЯЕМ ФАЙЛЫ
+                            $response['task']['files'] = $task_files;
                             $response['task']['parent_chain'] = $parent_chain;
+                            $response['task']['parent_tasks'] = $parent_tasks_data;  // ДОБАВЛЯЕМ ДАННЫЕ О РОДИТЕЛЯХ
                             $response['task']['project_uuid'] = $task['project_uuid'];
                             $response['task']['direct_parent_uuid'] = $direct_parent;
                         } else {
@@ -1724,7 +1749,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                 }
             }
         }
-        // ==================== BLOCK END: ajax_get_task_info v5.2 ====================
+        // ==================== BLOCK END: ajax_get_task_info v5.3 ====================
         
         // Проверка прав на редактирование
         elseif ($action === 'check_edit_permission') {
@@ -3007,6 +3032,80 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
     user-select: text !important;
     -webkit-user-select: text !important;
 }
+
+/* ==================== FIX: Mobile subtasks toggle button visibility v1.0 ==================== */
+/* Исправляет отображение кнопки раскрытия подзадач на мобильных устройствах */
+
+/* Основные стили для кнопки раскрытия подзадач */
+.subtasks-toggle {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    padding: 2px 8px;
+    background: rgba(79, 124, 255, 0.2);
+    border-radius: 16px;
+    font-size: 11px;
+    transition: all 0.2s ease;
+    user-select: none;
+}
+
+.subtasks-toggle:hover,
+.subtasks-toggle:active {
+    background: rgba(79, 124, 255, 0.4);
+    transform: scale(1.02);
+}
+
+/* Убеждаемся, что метка в бейдже не теряет кликабельность */
+.flat-task-badge.clickable {
+    cursor: pointer;
+}
+
+/* Специальные стили для мобильных устройств */
+@media (max-width: 768px) {
+    .subtasks-toggle {
+        display: inline-flex !important;
+        background: rgba(79, 124, 255, 0.25);
+        padding: 4px 10px !important;
+        font-size: 12px !important;
+        min-width: 44px; /* Увеличенная область касания для пальцев */
+        min-height: 28px;
+        justify-content: center;
+        border-radius: 20px !important;
+    }
+    
+    .subtasks-toggle:active {
+        background: rgba(79, 124, 255, 0.6) !important;
+    }
+    
+    /* Убеждаемся, что контейнер подзадач виден при раскрытии */
+    .subtasks-container {
+        width: 100%;
+        overflow-x: hidden;
+    }
+    
+    .subtasks-container.expanded {
+        display: block !important;
+    }
+    
+    /* Подзадачи на мобильных - с отступом */
+    .subtask-item {
+        margin-left: 8px;
+        padding-left: 8px;
+        border-left: 2px solid rgba(79, 124, 255, 0.3);
+    }
+}
+
+/* Для очень маленьких экранов (до 480px) */
+@media (max-width: 480px) {
+    .subtasks-toggle {
+        padding: 4px 8px !important;
+        font-size: 10px !important;
+        min-width: 40px;
+    }
+}
+/* ==================== END FIX ==================== */
 </style>
 <script nonce="<?= CSP_NONCE ?>">window.APP_BASE = '<?= $appBase ?>'</script>
 </head>
@@ -4145,9 +4244,15 @@ function toggleTaskStatus(e, uuid, done) {
     .catch(function(err) { logError('[TOGGLE_STATUS] Error:', err); showAlert('Ошибка при изменении статуса', 'error'); });
 }
 
-// ========== ФУНКЦИЯ createSubtask - ИСПРАВЛЕНА ver.4.5 ==========
+// ==================== BLOCK START: createSubtask v4.7 (FIXED parent pre-selection) ====================
 // ver.4.4 - ИСПРАВЛЕНА УСТАНОВКА ПРОЕКТА ПРИ СОЗДАНИИ ПОДЗАДАЧИ
 // ver.4.5 (2026-06-05) - ДОБАВЛЕНА ПРОВЕРКА ПРАВ НА СОЗДАНИЕ ПОДЗАДАЧ
+// ver.4.6 (2026-06-11) - ИСПРАВЛЕНА УСТАНОВКА РОДИТЕЛЬСКОЙ ЗАДАЧИ
+// ver.4.7 (2026-06-11) - ИСПРАВЛЕНА ПРОБЛЕМА: родительская задача теперь предустанавливается КОРРЕКТНО
+// - Исправлена асинхронная проблема с updateParentSelect
+// - Родительская задача устанавливается ТОЛЬКО ПОСЛЕ загрузки списка
+// - Добавлены логи для отладки
+
 function createSubtask(parentUuid) {
     if (!currentProjectUuid) { 
         showAlert('Сначала выберите проект', 'warning'); 
@@ -4156,7 +4261,9 @@ function createSubtask(parentUuid) {
     
     logDebug('[CREATE_SUBTASK] Creating subtask for parent:', parentUuid, 'currentProjectUuid:', currentProjectUuid);
     
-    // ========== V4.5: ПРОВЕРКА ПРАВ ПЕРЕД ОТКРЫТИЕМ МОДАЛЬНОГО ОКНА ==========
+    // Сохраняем родительский UUID в глобальную переменную на случай, если проверка прав займёт время
+    window._pendingParentUuid = parentUuid;
+    
     // Показываем индикатор загрузки на кнопке (если есть)
     var triggerButton = document.activeElement;
     var originalButtonText = '';
@@ -4187,13 +4294,14 @@ function createSubtask(parentUuid) {
         }
         
         if (data.success && data.can_create_task === true) {
-            // Есть права — открываем модальное окно
+            // Есть права — открываем модальное окно, передавая родительский UUID
             openCreateSubtaskModal(parentUuid);
         } else {
             // Нет прав — показываем предупреждение
             showAlert('У вас нет прав на создание подзадач в этом проекте', 'warning');
             logDebug('[CREATE_SUBTASK] User has no permission to create subtasks in project:', currentProjectUuid);
         }
+        window._pendingParentUuid = null;
     })
     .catch(function(err) {
         logError('[CREATE_SUBTASK] Error checking permission:', err);
@@ -4202,16 +4310,30 @@ function createSubtask(parentUuid) {
             triggerButton.disabled = false;
         }
         showAlert('Ошибка проверки прав. Попробуйте обновить страницу.', 'error');
+        window._pendingParentUuid = null;
     });
 }
+// ==================== BLOCK END: createSubtask v4.7 ====================
 
-// Вспомогательная функция — открытие модального окна для подзадачи
+// ==================== BLOCK START: openCreateSubtaskModal v4.8 (FIXED parent pre-selection) ====================
+// ver.4.4 - Базовая версия
+// ver.4.8 (2026-06-11) - ИСПРАВЛЕНА УСТАНОВКА РОДИТЕЛЬСКОЙ ЗАДАЧИ
+// - Теперь родительская задача устанавливается через callback после загрузки списка
+// - Добавлена проверка, что select действительно существует перед установкой
+// - Добавлены подробные логи для отладки
+
 function openCreateSubtaskModal(parentUuid) {
     window.isCreatingSubtask = true;
+    
+    logDebug('[CREATE_SUBTASK_MODAL] v4.8 Opening modal for parent UUID:', parentUuid);
+    
+    // Получаем название родительской задачи для заголовка
     var parentTaskElement = document.querySelector('.flat-task-item[data-task-uuid="' + parentUuid + '"] .flat-task-title, .subtask-item[data-task-uuid="' + parentUuid + '"] .flat-task-title');
     var parentTitle = parentTaskElement ? parentTaskElement.innerText : 'задачи';
+    
     document.getElementById('task-modal-title').innerText = '➕ Создание подзадачи: ' + escapeHtml(parentTitle);
     
+    // Очищаем форму
     document.getElementById('task-uuid').value = '';
     document.getElementById('task-title').value = '';
     document.getElementById('task-descr').value = '';
@@ -4219,35 +4341,69 @@ function openCreateSubtaskModal(parentUuid) {
     document.getElementById('task-time-start').value = '';
     document.getElementById('task-time-end').value = '';
     document.getElementById('task-files-list').innerHTML = '';
-    
-    // Устанавливаем проект в скрытое поле
-    document.getElementById('task-project-uuid').value = currentProjectUuid;
-    
-    // Устанавливаем проект в select (важно!)
-    var projectSelect = document.getElementById('task-project-select');
-    if (projectSelect) {
-        projectSelect.value = currentProjectUuid;
-        logDebug('[CREATE_SUBTASK] Set project select to:', currentProjectUuid);
-    }
-    
     document.getElementById('file-manager').style.display = 'none';
     document.getElementById('open-messages-btn').style.display = 'none';
+    
     var taskDeleteSection = document.getElementById('task-delete-section');
     if (taskDeleteSection) taskDeleteSection.style.display = 'none';
     var deleteConfirm = document.getElementById('task-delete-confirm');
     if (deleteConfirm) deleteConfirm.value = '';
     
+    // Устанавливаем проект в скрытое поле
+    document.getElementById('task-project-uuid').value = currentProjectUuid;
+    document.getElementById('task-parent-uuid-old').value = ''; // Очищаем старый родитель
+    
+    // Устанавливаем проект в select (важно!)
+    var projectSelect = document.getElementById('task-project-select');
+    if (projectSelect) {
+        projectSelect.value = currentProjectUuid;
+        logDebug('[CREATE_SUBTASK_MODAL] Set project select to:', currentProjectUuid);
+    }
+    
+    // v4.8: ЗАГРУЖАЕМ СПИСОК РОДИТЕЛЕЙ И УСТАНАВЛИВАЕМ РОДИТЕЛЬСКУЮ ЗАДАЧУ через callback
+    logDebug('[CREATE_SUBTASK_MODAL] Loading parent select options...');
     updateParentSelect(currentProjectUuid, null, function() {
         var parentSelect = document.getElementById('task-parent-select');
         if (parentSelect) {
-            parentSelect.value = parentUuid;
-            logDebug('[CREATE_SUBTASK] Set parent select to:', parentUuid);
+            // Проверяем, есть ли опция с нужным значением
+            var optionExists = false;
+            for (var i = 0; i < parentSelect.options.length; i++) {
+                if (parentSelect.options[i].value === parentUuid) {
+                    optionExists = true;
+                    break;
+                }
+            }
+            
+            if (optionExists) {
+                parentSelect.value = parentUuid;
+                logDebug('[CREATE_SUBTASK_MODAL] SUCCESS: Set parent select to:', parentUuid);
+            } else {
+                logDebug('[CREATE_SUBTASK_MODAL] WARNING: Parent option not found:', parentUuid);
+                logDebug('[CREATE_SUBTASK_MODAL] Available options:', 
+                    Array.from(parentSelect.options).map(function(opt) { return opt.value; }));
+                
+                // Пробуем добавить опцию, если её нет
+                var newOption = document.createElement('option');
+                newOption.value = parentUuid;
+                newOption.textContent = parentTitle + ' (текущая задача)';
+                parentSelect.appendChild(newOption);
+                parentSelect.value = parentUuid;
+                logDebug('[CREATE_SUBTASK_MODAL] Added missing parent option');
+            }
+        } else {
+            logError('[CREATE_SUBTASK_MODAL] Parent select element not found!');
         }
     });
+    
+    // Открываем модальное окно
     document.getElementById('task-modal').classList.add('active');
-    setTimeout(function() { window.isCreatingSubtask = false; }, 1000);
+    
+    // Сбрасываем флаг через секунду
+    setTimeout(function() { 
+        window.isCreatingSubtask = false; 
+    }, 1000);
 }
-// ========== КОНЕЦ ФУНКЦИИ createSubtask ==========
+// ==================== BLOCK END: openCreateSubtaskModal v4.8 ====================
 
 
 // ========== ФУНКЦИЯ showCreateTaskModal - ИСПРАВЛЕНА ver.4.5 ==========
@@ -4361,8 +4517,10 @@ function editTask(uuid) {
     .catch(function(err) { logError('[EDIT_TASK] Permission check error:', err); showAlert('Ошибка проверки прав', 'error'); });
 }
 
-// ========== ФУНКЦИЯ loadTaskForEdit - ИСПРАВЛЕНА ver.4.4 ==========
+// ==================== BLOCK START: loadTaskForEdit v4.5 (with callback) ====================
 // ver.4.4 - ИСПРАВЛЕНА УСТАНОВКА ПРОЕКТА ПРИ РЕДАКТИРОВАНИИ ЗАДАЧИ
+// ver.4.5 (2026-06-11) - ИСПРАВЛЕНА УСТАНОВКА РОДИТЕЛЬСКОЙ ЗАДАЧИ ЧЕРЕЗ CALLBACK
+
 function loadTaskForEdit(uuid) {
     logDebug('[LOAD_TASK_FOR_EDIT] Loading task for edit:', uuid);
     
@@ -4400,12 +4558,33 @@ function loadTaskForEdit(uuid) {
             document.getElementById('task-time-start').value = utcToLocalDatetimeString(d.task.time_start_utc);
             document.getElementById('task-time-end').value = utcToLocalDatetimeString(d.task.time_end_plan_utc);
             
+            // v4.5: Загружаем список родителей и только после этого устанавливаем значение
             if (d.task.project_uuid) {
+                logDebug('[LOAD_TASK_FOR_EDIT] Updating parent select with callback...');
                 updateParentSelect(d.task.project_uuid, d.task.uuid, function() {
                     var select = document.getElementById('task-parent-select');
                     if (select && d.task.parent_task_uuid) {
-                        select.value = d.task.parent_task_uuid;
-                        logDebug('[LOAD_TASK_FOR_EDIT] Set parent select to:', d.task.parent_task_uuid);
+                        // Проверяем, существует ли опция
+                        var optionExists = false;
+                        for (var i = 0; i < select.options.length; i++) {
+                            if (select.options[i].value === d.task.parent_task_uuid) {
+                                optionExists = true;
+                                break;
+                            }
+                        }
+                        
+                        if (optionExists) {
+                            select.value = d.task.parent_task_uuid;
+                            logDebug('[LOAD_TASK_FOR_EDIT] Set parent select to:', d.task.parent_task_uuid);
+                        } else {
+                            logDebug('[LOAD_TASK_FOR_EDIT] Parent option not found:', d.task.parent_task_uuid);
+                            // Добавляем опцию, если её нет
+                            var newOption = document.createElement('option');
+                            newOption.value = d.task.parent_task_uuid;
+                            newOption.textContent = d.task.title + ' (текущая задача)';
+                            select.appendChild(newOption);
+                            select.value = d.task.parent_task_uuid;
+                        }
                     }
                 });
             }
@@ -4426,10 +4605,25 @@ function loadTaskForEdit(uuid) {
         showAlert('Ошибка загрузки задачи', 'error'); 
     });
 }
-// ========== КОНЕЦ ФУНКЦИИ loadTaskForEdit ==========
+// ==================== BLOCK END: loadTaskForEdit v4.5 ====================
+
+// ==================== BLOCK START: updateParentSelect v4.3 (with callback support) ====================
+// ver.4.0 - Базовая версия
+// ver.4.1 - Добавлено логирование
+// ver.4.2 - Исправлена фильтрация подзадач
+// ver.4.3 (2026-06-11) - ДОБАВЛЕН ПАРАМЕТР callback ДЛЯ АСИНХРОННОЙ ОБРАБОТКИ
+// - Теперь можно передать callback, который выполнится после загрузки списка
+// - Улучшена обработка ошибок
 
 function updateParentSelect(projectUuid, currentTaskUuid, callback) {
-    if (!projectUuid) return;
+    if (!projectUuid) {
+        logDebug('[UPDATE_PARENT_SELECT] No project UUID, skipping');
+        if (callback) callback();
+        return;
+    }
+    
+    logDebug('[UPDATE_PARENT_SELECT] v4.3 Loading parents for project:', projectUuid, 'currentTaskUuid:', currentTaskUuid);
+    
     var formData = new URLSearchParams();
     formData.append('action', 'get_project_tasks_sorted');
     formData.append('project_uuid', projectUuid);
@@ -4447,22 +4641,52 @@ function updateParentSelect(projectUuid, currentTaskUuid, callback) {
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
+        var select = document.getElementById('task-parent-select');
+        if (!select) {
+            logDebug('[UPDATE_PARENT_SELECT] Parent select element not found');
+            if (callback) callback();
+            return;
+        }
+        
         if (data.success && data.tasks) {
-            var select = document.getElementById('task-parent-select');
-            if (select) {
-                var html = '<option value="">-- Нет (корневая задача) --</option>';
-                for (var i = 0; i < data.tasks.length; i++) {
-                    var task = data.tasks[i];
-                    if (currentTaskUuid && task.uuid === currentTaskUuid) continue;
-                    html += '<option value="' + escapeHtml(task.uuid) + '">' + escapeHtml(task.title) + '</option>';
+            var html = '<option value="">-- Нет (корневая задача) --</option>';
+            var excludedCount = 0;
+            
+            for (var i = 0; i < data.tasks.length; i++) {
+                var task = data.tasks[i];
+                // Исключаем текущую задачу из списка (чтобы нельзя было сделать себя родителем)
+                if (currentTaskUuid && task.uuid === currentTaskUuid) {
+                    excludedCount++;
+                    continue;
                 }
-                select.innerHTML = html;
-                if (callback) callback();
+                html += '<option value="' + escapeHtml(task.uuid) + '">' + escapeHtml(task.title) + '</option>';
             }
+            
+            select.innerHTML = html;
+            logDebug('[UPDATE_PARENT_SELECT] Loaded ' + data.tasks.length + ' potential parents, excluded ' + excludedCount);
+            
+            // v4.3: Вызываем callback ПОСЛЕ того, как DOM обновлён
+            if (callback) {
+                logDebug('[UPDATE_PARENT_SELECT] Calling callback after select population');
+                callback();
+            }
+        } else {
+            logDebug('[UPDATE_PARENT_SELECT] No tasks found or error:', data.error);
+            select.innerHTML = '<option value="">-- Нет доступных родительских задач --</option>';
+            if (callback) callback();
         }
     })
-    .catch(function(err) { logError('[UPDATE_PARENT] Error:', err); });
+    .catch(function(err) { 
+        logError('[UPDATE_PARENT_SELECT] Error:', err);
+        var select = document.getElementById('task-parent-select');
+        if (select) {
+            select.innerHTML = '<option value="">-- Ошибка загрузки --</option>';
+        }
+        if (callback) callback();
+    });
 }
+// ==================== BLOCK END: updateParentSelect v4.3 ====================
+
 
 // ========== ФУНКЦИЯ onTaskProjectChange - ИСПРАВЛЕНА ver.4.4 ==========
 // ver.4.4 - ДОБАВЛЕНО ЛОГГИРОВАНИЕ ДЛЯ ОТЛАДКИ
@@ -4571,6 +4795,10 @@ function detachFile(fileUuid) {
     });
 }
 
+// ==================== BLOCK START: saveTask v4.7 (with ensureTaskVisible) ====================
+// ver.4.6 - Базовая версия с auto-expand
+// ver.4.7 (2026-06-11) - ЗАМЕНА НА ensureTaskVisible
+
 function saveTask(e, retryCount) {
     if (retryCount === undefined) retryCount = 0;
     e.preventDefault();
@@ -4582,6 +4810,12 @@ function saveTask(e, retryCount) {
     if (!parentTaskUuid || parentTaskUuid === '' || parentTaskUuid === 'null') parentTaskUuid = '';
     var localStart = document.getElementById('task-time-start').value;
     var localEnd = document.getElementById('task-time-end').value;
+    
+    // Сохраняем UUID родителя ДО сохранения (для случая создания подзадачи)
+    var isCreatingSubtask = (action === 'create_task' && parentTaskUuid && parentTaskUuid !== '');
+    var createdParentUuid = isCreatingSubtask ? parentTaskUuid : null;
+    
+    logDebug('[SAVE_TASK] Action:', action, 'isCreatingSubtask:', isCreatingSubtask, 'parentTaskUuid:', parentTaskUuid);
     
     var formData = new URLSearchParams();
     formData.append('action', action);
@@ -4620,7 +4854,27 @@ function saveTask(e, retryCount) {
         if (d && d.success) {
             closeModal('task-modal');
             showAlert('Задача "' + title + '" ' + (action === 'create_task' ? 'создана' : 'сохранена'), 'success');
-            if (currentProjectUuid) loadProjectTasks(true);
+            
+            // v4.7: Если создавалась подзадача — используем ensureTaskVisible
+            if (isCreatingSubtask && d.task && d.task.uuid) {
+                var newTaskUuid = d.task.uuid;
+                logDebug('[SAVE_TASK] Created subtask, ensuring visibility for task:', newTaskUuid);
+                ensureTaskVisible(newTaskUuid, function(success) {
+                    if (success) {
+                        logDebug('[SAVE_TASK] Task is now visible');
+                    } else {
+                        logDebug('[SAVE_TASK] Failed to ensure visibility, fallback reload');
+                        if (currentProjectUuid) loadProjectTasks(true);
+                    }
+                });
+            } else if (action === 'create_task' && d.task && d.task.uuid) {
+                // Корневая задача — просто перезагружаем
+                if (currentProjectUuid) loadProjectTasks(true);
+            } else {
+                // Редактирование задачи
+                if (currentProjectUuid) loadProjectTasks(true);
+            }
+            
             if (d.refresh_dashboard && typeof window.refreshDashboard === 'function') setTimeout(function() { window.refreshDashboard(); }, 500);
             if (window.SSE && typeof window.SSE.refreshCounters === 'function') setTimeout(function() { window.SSE.refreshCounters(); }, 1000);
         } else if (d && !d.success) {
@@ -4640,6 +4894,9 @@ function saveTask(e, retryCount) {
         }
     });
 }
+// ==================== BLOCK END: saveTask v4.7 ====================
+
+
 
 function deleteTaskWithConfirm() {
     var confirmValue = document.getElementById('task-delete-confirm').value;
@@ -5290,28 +5547,33 @@ setTimeout(function() {
 // ==================== BLOCK END: Container Diagnostics v1.0 ====================
 
 
-// ==================== BLOCK START: attachSubtaskToggleHandlers v2.1 (with retry and logging) ====================
+// ==================== BLOCK START: attachSubtaskToggleHandlers v2.2 (with mobile touch support) ====================
 // ver.1.0 - Базовая версия
 // ver.2.0 (2026-06-05) - ДОБАВЛЕНА ПРОВЕРКА НА СУЩЕСТВОВАНИЕ КОНТЕЙНЕРА ПРИ КЛИКЕ
-// - При отсутствии контейнера - повторная попытка через 100мс
-// - Добавлено подробное логирование
-// ver.2.1 (2026-06-05) - УЛУЧШЕНА ОБРАБОТКА: проверка существования элементов перед кликом
+// ver.2.1 (2026-06-05) - УЛУЧШЕНА ОБРАБОТКА
+// ver.2.2 (2026-06-11) - ДОБАВЛЕНА ПОДДЕРЖКА МОБИЛЬНЫХ УСТРОЙСТВ (touch events)
+// - Добавлена обработка touchstart для мобильных
+// - Улучшена визуальная обратная связь
 
 function attachSubtaskToggleHandlers() {
     var toggles = document.querySelectorAll('.subtasks-toggle');
-    logDebug('[ATTACH_HANDLERS] Found ' + toggles.length + ' subtask toggle buttons');
+    logDebug('[ATTACH_HANDLERS] v2.2 Found ' + toggles.length + ' subtask toggle buttons');
     
     for (var i = 0; i < toggles.length; i++) {
         // Удаляем старый обработчик, если есть
         if (toggles[i]._subtaskHandler) {
             toggles[i].removeEventListener('click', toggles[i]._subtaskHandler);
+            toggles[i].removeEventListener('touchstart', toggles[i]._subtaskHandler);
             logDebug('[ATTACH_HANDLERS] Removed old handler from button ' + i);
         }
         
         // Создаём новый обработчик
         var handler = function(e) {
+            // Предотвращаем всплытие, но не предотвращаем действие по умолчанию полностью
             e.stopPropagation();
-            e.preventDefault();
+            if (e.type === 'touchstart') {
+                e.preventDefault(); // Только для touch, чтобы избежать двойного срабатывания
+            }
             
             var taskUuid = this.dataset.taskUuid;
             if (!taskUuid) {
@@ -5323,13 +5585,12 @@ function attachSubtaskToggleHandlers() {
             
             if (!childrenDiv) {
                 logDebug('[SUBTASK_TOGGLE] Container children-' + taskUuid + ' NOT FOUND, will retry');
-                // Сохраняем ссылку на текущую кнопку и повторяем через 100мс
                 var self = this;
                 setTimeout(function() {
                     var retryDiv = document.getElementById('children-' + taskUuid);
                     if (retryDiv) {
                         logDebug('[SUBTASK_TOGGLE] Container found on retry, executing click again');
-                        self.click(); // Повторяем клик
+                        self.click();
                     } else {
                         logDebug('[SUBTASK_TOGGLE] Container still not found after retry for task:', taskUuid);
                         showAlert('Ошибка: контейнер подзадач не найден', 'error');
@@ -5339,6 +5600,12 @@ function attachSubtaskToggleHandlers() {
             }
             
             logDebug('[SUBTASK_TOGGLE] Toggling subtasks for task:', taskUuid, 'current expanded:', childrenDiv.classList.contains('expanded'));
+            
+            // Визуальная обратная связь
+            this.style.transform = 'scale(0.95)';
+            setTimeout(function(el) {
+                if (el) el.style.transform = '';
+            }, 150, this);
             
             if (childrenDiv.classList.contains('expanded')) {
                 childrenDiv.classList.remove('expanded');
@@ -5366,12 +5633,14 @@ function attachSubtaskToggleHandlers() {
             }
         };
         
+        // Добавляем оба типа событий для лучшей поддержки мобильных
         toggles[i].addEventListener('click', handler);
+        toggles[i].addEventListener('touchstart', handler);
         toggles[i]._subtaskHandler = handler;
         logDebug('[ATTACH_HANDLERS] Attached handler to button ' + i + ' for task:', toggles[i].dataset.taskUuid);
     }
 }
-// ==================== BLOCK END: attachSubtaskToggleHandlers v2.1 ====================
+// ==================== BLOCK END: attachSubtaskToggleHandlers v2.2 ====================
 
 
 // ========== ОТСЛЕЖИВАНИЕ ВЫДЕЛЕНИЯ ТЕКСТА ==========
@@ -5675,66 +5944,44 @@ function highlightAndScrollToTask(taskElement) {
     }, 30000);
 }
 
-// Оптимизированная функция выбора задачи по UUID
+// ==================== BLOCK START: selectTaskByUuid v2.0 (using ensureTaskVisible) ====================
+// ver.1.0 - Базовая версия с getTaskPageInfo
+// ver.2.0 (2026-06-11) - УПРОЩЕНА с использованием ensureTaskVisible для поддержки глубокой вложенности
+
 function selectTaskByUuid(taskUuid) {
-    logDebug('[SELECT_TASK] Looking for task:', taskUuid);
+    logDebug('[SELECT_TASK] v2.0 Looking for task:', taskUuid);
     
-    var taskElement = document.querySelector('.flat-task-item[data-task-uuid="' + taskUuid + '"], .subtask-item[data-task-uuid="' + taskUuid + '"]');
-    if (taskElement) {
-        highlightAndScrollToTask(taskElement);
+    // Проверяем, не отображается ли уже задача в DOM
+    var existingTask = document.querySelector('.flat-task-item[data-task-uuid="' + taskUuid + '"], .subtask-item[data-task-uuid="' + taskUuid + '"]');
+    if (existingTask) {
+        logDebug('[SELECT_TASK] Task already in DOM, highlighting');
+        highlightAndScrollToTask(existingTask);
         return;
     }
     
-    // Задача не найдена на текущей странице - получаем информацию о странице одним запросом
-    logDebug('[SELECT_TASK] Task not on current page, getting page info...');
-    
-    getTaskPageInfo(
-        taskUuid,
-        currentProjectUuid,
-        currentSortBy,
-        currentSortDir,
-        currentFilterStatuses,
-        currentFilterAssigned,
-        currentSearch,
-        currentPerPage
-    ).then(function(pageInfo) {
-        logDebug('[SELECT_TASK] Task found on page', pageInfo.page);
-        
-        // Устанавливаем нужную страницу
-        currentTaskPage = pageInfo.page;
-        
-        // Загружаем задачи (без сброса страницы)
-        loadProjectTasks(false);
-        
-        // Ждём загрузки и подсвечиваем задачу
-        var maxAttempts = 50;
-        var attempt = 0;
-        
-        function waitForTask() {
-            var taskElement = document.querySelector('.flat-task-item[data-task-uuid="' + taskUuid + '"], .subtask-item[data-task-uuid="' + taskUuid + '"]');
-            if (taskElement) {
-                highlightAndScrollToTask(taskElement);
-                logDebug('[SELECT_TASK] Task found and highlighted');
-            } else if (attempt < maxAttempts) {
-                attempt++;
-                setTimeout(waitForTask, 200);
-            } else {
-                logWarning('[SELECT_TASK] Task not found after loading page', pageInfo.page);
-                showAlert('Задача не найдена на странице ' + pageInfo.page, 'warning');
-            }
+    // Используем универсальную функцию ensureTaskVisible
+    // Она сама получит parent_chain через API и раскроет всех родителей
+    logDebug('[SELECT_TASK] Task not in DOM, using ensureTaskVisible');
+    ensureTaskVisible(taskUuid, function(success) {
+        if (success) {
+            logDebug('[SELECT_TASK] Task is now visible');
+        } else {
+            logDebug('[SELECT_TASK] Failed to make task visible');
+            showAlert('Не удалось найти задачу. Возможно, она была удалена или у вас нет доступа.', 'warning');
         }
-        
-        setTimeout(waitForTask, 500);
-    }).catch(function(err) {
-        logError('[SELECT_TASK] Failed to get page info:', err);
-        showAlert('Не удалось найти задачу: ' + (err.message || 'неизвестная ошибка'), 'error');
     });
 }
+// ==================== BLOCK END: selectTaskByUuid v2.0 ====================
 
-// ==================== BLOCK START: findAndExpandTask v5.1 (with cross-page search) ====================
+
+
+// ==================== BLOCK START: findAndExpandTask v5.2 (FIXED for 3+ levels) ====================
 // ver.4.9 - Базовая версия
 // ver.5.0 (2026-06-10) - ДОБАВЛЕН ПОИСК ПО ВСЕМ СТРАНИЦАМ
 // ver.5.1 (2026-06-10) - ИСПРАВЛЕНА ЛОГИКА РАСКРЫТИЯ РОДИТЕЛЕЙ
+// ver.5.2 (2026-06-11) - ИСПРАВЛЕНА РАБОТА ДЛЯ 3+ УРОВНЕЙ ВЛОЖЕННОСТИ
+// - Теперь раскрываются ВСЕ уровни, а не только первый родитель
+// - Добавлены задержки для гарантированной загрузки каждого уровня
 
 function findAndExpandTask(targetUuid, maxAttempts, attempt, parentChain, searchPagesRemaining) {
     attempt = attempt || 0;
@@ -5742,7 +5989,7 @@ function findAndExpandTask(targetUuid, maxAttempts, attempt, parentChain, search
     parentChain = parentChain || [];
     searchPagesRemaining = searchPagesRemaining || 0;
     
-    logDebug('[FIND_TASK] Attempt', attempt + 1, 'of', maxAttempts, 'for task:', targetUuid);
+    logDebug('[FIND_TASK] v5.2 Attempt', attempt + 1, 'of', maxAttempts, 'for task:', targetUuid);
     logDebug('[FIND_TASK] Parent chain length:', parentChain.length, 'chain:', JSON.stringify(parentChain));
     
     var taskElement = document.querySelector('.flat-task-item[data-task-uuid="' + targetUuid + '"], .subtask-item[data-task-uuid="' + targetUuid + '"]');
@@ -5753,54 +6000,89 @@ function findAndExpandTask(targetUuid, maxAttempts, attempt, parentChain, search
         return true;
     }
     
+    // Если задача не найдена и это первая попытка - пробуем поискать по страницам
     if (attempt === 0 && searchPagesRemaining === 0 && currentProjectUuid) {
         logDebug('[FIND_TASK] Task not on page ' + currentTaskPage + ', starting cross-page search');
         searchTaskAcrossPages(targetUuid, 1, 20);
         return false;
     }
     
+    // v5.2: Раскрываем ВСЕХ родителей по очереди, а не только первого
     if (parentChain && parentChain.length > 0) {
-        var firstParentId = parentChain[0];
-        var parentElement = document.querySelector('.flat-task-item[data-task-uuid="' + firstParentId + '"]');
+        // Функция для последовательного раскрытия всех родителей
+        var currentIndex = 0;
         
-        if (parentElement) {
-            logDebug('[FIND_TASK] Parent found in DOM:', firstParentId);
-            
-            var childrenDiv = document.getElementById('children-' + firstParentId);
-            if (childrenDiv && !childrenDiv.classList.contains('expanded')) {
-                logDebug('[FIND_TASK] Expanding container for parent:', firstParentId);
-                childrenDiv.classList.add('expanded');
-            }
-            
-            if (childrenDiv && childrenDiv.getAttribute('data-loaded') !== 'true') {
-                var loadingDiv = childrenDiv.querySelector('.subtasks-loading');
-                if (loadingDiv) loadingDiv.style.display = 'block';
-                
-                logDebug('[FIND_TASK] Loading subtasks for parent:', firstParentId);
-                loadSubtasks(firstParentId, 'children-' + firstParentId, 1, false).then(function() {
-                    if (loadingDiv) loadingDiv.style.display = 'none';
-                    logDebug('[FIND_TASK] Subtasks loaded, continuing search');
-                    setTimeout(function() {
-                        findAndExpandTask(targetUuid, maxAttempts, attempt + 1, parentChain.slice(1), searchPagesRemaining);
-                    }, 300);
-                }).catch(function(err) {
-                    logError('[FIND_TASK] Failed to load subtasks:', err);
-                    if (loadingDiv) loadingDiv.style.display = 'none';
-                    setTimeout(function() {
-                        findAndExpandTask(targetUuid, maxAttempts, attempt + 1, parentChain.slice(1), searchPagesRemaining);
-                    }, 500);
-                });
-                return false;
-            } else if (childrenDiv && childrenDiv.getAttribute('data-loaded') === 'true') {
-                logDebug('[FIND_TASK] Subtasks already loaded for parent:', firstParentId);
+        function expandNextParent() {
+            if (currentIndex >= parentChain.length) {
+                logDebug('[FIND_TASK] All parents expanded, searching for task...');
                 setTimeout(function() {
-                    findAndExpandTask(targetUuid, maxAttempts, attempt + 1, parentChain.slice(1), searchPagesRemaining);
-                }, 200);
-                return false;
+                    findAndExpandTask(targetUuid, maxAttempts, attempt + 1, [], searchPagesRemaining);
+                }, 500);
+                return;
             }
-        } else {
-            logDebug('[FIND_TASK] Parent', firstParentId, 'not yet in DOM, will retry');
+            
+            var parentId = parentChain[currentIndex];
+            logDebug('[FIND_TASK] Expanding parent', currentIndex + 1, 'of', parentChain.length, ':', parentId);
+            
+            // Ждём появления родителя в DOM
+            var parentAttempts = 0;
+            var parentMaxAttempts = 30;
+            
+            function waitForParent() {
+                var parentElement = document.querySelector('.flat-task-item[data-task-uuid="' + parentId + '"]');
+                
+                if (parentElement) {
+                    logDebug('[FIND_TASK] Parent found in DOM:', parentId);
+                    
+                    var childrenDiv = document.getElementById('children-' + parentId);
+                    if (childrenDiv && !childrenDiv.classList.contains('expanded')) {
+                        logDebug('[FIND_TASK] Expanding container for parent:', parentId);
+                        childrenDiv.classList.add('expanded');
+                    }
+                    
+                    if (childrenDiv && childrenDiv.getAttribute('data-loaded') !== 'true') {
+                        var loadingDiv = childrenDiv.querySelector('.subtasks-loading');
+                        if (loadingDiv) loadingDiv.style.display = 'block';
+                        
+                        logDebug('[FIND_TASK] Loading subtasks for parent:', parentId);
+                        loadSubtasks(parentId, 'children-' + parentId, 1, false).then(function() {
+                            if (loadingDiv) loadingDiv.style.display = 'none';
+                            logDebug('[FIND_TASK] Subtasks loaded for parent:', parentId);
+                            currentIndex++;
+                            setTimeout(expandNextParent, 300);
+                        }).catch(function(err) {
+                            logError('[FIND_TASK] Failed to load subtasks:', err);
+                            if (loadingDiv) loadingDiv.style.display = 'none';
+                            currentIndex++;
+                            setTimeout(expandNextParent, 500);
+                        });
+                    } else if (childrenDiv && childrenDiv.getAttribute('data-loaded') === 'true') {
+                        logDebug('[FIND_TASK] Subtasks already loaded for parent:', parentId);
+                        currentIndex++;
+                        setTimeout(expandNextParent, 200);
+                    } else {
+                        // Нет контейнера подзадач - возможно, это корневая задача
+                        currentIndex++;
+                        setTimeout(expandNextParent, 200);
+                    }
+                } else {
+                    parentAttempts++;
+                    if (parentAttempts < parentMaxAttempts) {
+                        logDebug('[FIND_TASK] Waiting for parent element:', parentId, 'attempt', parentAttempts);
+                        setTimeout(waitForParent, 200);
+                    } else {
+                        logDebug('[FIND_TASK] Parent element not found after max attempts:', parentId);
+                        currentIndex++;
+                        expandNextParent();
+                    }
+                }
+            }
+            
+            waitForParent();
         }
+        
+        expandNextParent();
+        return false;
     }
     
     if (attempt >= maxAttempts) {
@@ -5810,12 +6092,12 @@ function findAndExpandTask(targetUuid, maxAttempts, attempt, parentChain, search
     }
     
     var delay = Math.min(1000, 200 + attempt * 30);
-    logDebug('[FIND_TASK] Attempt', attempt + 1, 'of', maxAttempts, 'retrying in', delay, 'ms');
     setTimeout(function() {
         findAndExpandTask(targetUuid, maxAttempts, attempt + 1, parentChain, searchPagesRemaining);
     }, delay);
     return false;
 }
+// ==================== BLOCK END: findAndExpandTask v5.2 ====================
 
 function searchTaskAcrossPages(targetUuid, startPage, maxPages) {
     var page = startPage;
@@ -5880,6 +6162,201 @@ function searchTaskAcrossPages(targetUuid, startPage, maxPages) {
 }
 // ==================== BLOCK END: findAndExpandTask v5.1 ====================
 
+
+// ==================== BLOCK START: expandParentsChainInDom v2.0 (supports 3+ levels) ====================
+// ver.1.0 - Базовая версия
+// ver.2.0 (2026-06-11) - ПОДДЕРЖКА 3+ УРОВНЕЙ ВЛОЖЕННОСТИ
+// - Рекурсивно раскрывает ВСЕ уровни, загружая подзадачи по мере необходимости
+
+window.expandParentsChainInDom = function(parentChain, targetTaskUuid, callback) {
+    if (!parentChain || parentChain.length === 0) {
+        logDebug('[EXPAND_CHAIN] No parents to expand, searching for task:', targetTaskUuid);
+        if (callback) callback();
+        return;
+    }
+    
+    logDebug('[EXPAND_CHAIN] Expanding ' + parentChain.length + ' parents for task:', targetTaskUuid);
+    
+    var index = 0;
+    
+    function expandNext() {
+        if (index >= parentChain.length) {
+            logDebug('[EXPAND_CHAIN] All parents expanded, searching for task:', targetTaskUuid);
+            if (callback) callback();
+            return;
+        }
+        
+        var parentId = parentChain[index];
+        logDebug('[EXPAND_CHAIN] Expanding parent', index + 1, 'of', parentChain.length, ':', parentId);
+        
+        var attempts = 0;
+        var maxAttempts = 40;
+        
+        function waitForParent() {
+            // Ищем родителя как в корневых, так и в подзадачах
+            var parentElement = document.querySelector('.flat-task-item[data-task-uuid="' + parentId + '"], .subtask-item[data-task-uuid="' + parentId + '"]');
+            
+            if (parentElement) {
+                logDebug('[EXPAND_CHAIN] Parent element found:', parentId);
+                
+                var childrenDiv = document.getElementById('children-' + parentId);
+                if (!childrenDiv) {
+                    logDebug('[EXPAND_CHAIN] Children container not found for:', parentId);
+                    index++;
+                    expandNext();
+                    return;
+                }
+                
+                // Раскрываем контейнер
+                if (!childrenDiv.classList.contains('expanded')) {
+                    childrenDiv.classList.add('expanded');
+                    logDebug('[EXPAND_CHAIN] Expanded container for:', parentId);
+                }
+                
+                // Если подзадачи ещё не загружены - загружаем
+                if (childrenDiv.getAttribute('data-loaded') !== 'true') {
+                    var loadingDiv = childrenDiv.querySelector('.subtasks-loading');
+                    if (loadingDiv) loadingDiv.style.display = 'block';
+                    
+                    logDebug('[EXPAND_CHAIN] Loading subtasks for parent:', parentId);
+                    loadSubtasks(parentId, 'children-' + parentId, 1, false).then(function() {
+                        if (loadingDiv) loadingDiv.style.display = 'none';
+                        logDebug('[EXPAND_CHAIN] Subtasks loaded for parent:', parentId);
+                        index++;
+                        setTimeout(expandNext, 400);
+                    }).catch(function(err) {
+                        logError('[EXPAND_CHAIN] Failed to load subtasks:', err);
+                        if (loadingDiv) loadingDiv.style.display = 'none';
+                        index++;
+                        setTimeout(expandNext, 600);
+                    });
+                } else {
+                    logDebug('[EXPAND_CHAIN] Subtasks already loaded for parent:', parentId);
+                    index++;
+                    setTimeout(expandNext, 300);
+                }
+            } else {
+                attempts++;
+                if (attempts < maxAttempts) {
+                    logDebug('[EXPAND_CHAIN] Waiting for parent element:', parentId, 'attempt', attempts);
+                    setTimeout(waitForParent, 200);
+                } else {
+                    logDebug('[EXPAND_CHAIN] Parent element not found after max attempts:', parentId);
+                    index++;
+                    expandNext();
+                }
+            }
+        }
+        
+        waitForParent();
+    }
+    
+    expandNext();
+};
+// ==================== BLOCK END: expandParentsChainInDom v2.0 ====================
+
+function findAndHighlightTask(taskUuid, maxAttempts, attempt) {
+    attempt = attempt || 0;
+    maxAttempts = maxAttempts || 50;
+    
+    logDebug('[FIND_TASK] Attempt', attempt + 1, 'of', maxAttempts, 'for task:', taskUuid);
+    
+    var taskElement = document.querySelector('.flat-task-item[data-task-uuid="' + taskUuid + '"], .subtask-item[data-task-uuid="' + taskUuid + '"]');
+    
+    if (taskElement) {
+        logDebug('[FIND_TASK] Task found! Highlighting and scrolling...');
+        highlightAndScrollToTask(taskElement);
+        return true;
+    }
+    
+    if (attempt < maxAttempts) {
+        var delay = Math.min(500, 100 + attempt * 30);
+        setTimeout(function() {
+            findAndHighlightTask(taskUuid, maxAttempts, attempt + 1);
+        }, delay);
+        return false;
+    }
+    
+    logDebug('[FIND_TASK] Task not found after', maxAttempts, 'attempts:', taskUuid);
+    return false;
+}
+
+// ==================== BLOCK START: ensureTaskVisible v1.1 (with longer delays) ====================
+// ver.1.0 (2026-06-11) - УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ДЛЯ РАСКРЫТИЯ ЛЮБОЙ ЗАДАЧИ
+// ver.1.1 (2026-06-11) - УВЕЛИЧЕНЫ ЗАДЕРЖКИ ДЛЯ 3+ УРОВНЕЙ
+
+function ensureTaskVisible(taskUuid, callback) {
+    logDebug('[ENSURE_VISIBLE] Ensuring task is visible:', taskUuid);
+    
+    // Сначала пробуем найти задачу в DOM
+    var existingTask = document.querySelector('.flat-task-item[data-task-uuid="' + taskUuid + '"], .subtask-item[data-task-uuid="' + taskUuid + '"]');
+    if (existingTask) {
+        logDebug('[ENSURE_VISIBLE] Task already visible, just highlight');
+        if (typeof highlightAndScrollToTask === 'function') {
+            highlightAndScrollToTask(existingTask);
+        }
+        if (callback) callback(true);
+        return;
+    }
+    
+    // Получаем цепочку родителей через API
+    var formData = new URLSearchParams();
+    formData.append('action', 'get_task_info');
+    formData.append('task_uuid', taskUuid);
+    formData.append('ajax_mode', '1');
+    addCsrfToUrlParams(formData);
+    
+    fetch(window.location.href, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success && data.task) {
+            var parentChain = data.task.parent_chain || [];
+            logDebug('[ENSURE_VISIBLE] Parent chain:', JSON.stringify(parentChain));
+            
+            if (parentChain.length === 0) {
+                // Корневая задача — просто перезагружаем страницу задач
+                if (currentProjectUuid) {
+                    loadProjectTasks(true);
+                    setTimeout(function() {
+                        window.findAndHighlightTask(taskUuid, 50, 0);
+                    }, 1500);
+                }
+                if (callback) callback(true);
+                return;
+            }
+            
+            // Раскрываем всех родителей
+            if (typeof window.expandParentsChainInDom === 'function') {
+                window.expandParentsChainInDom(parentChain, taskUuid, function() {
+                    logDebug('[ENSURE_VISIBLE] Parents expanded, searching for task...');
+                    setTimeout(function() {
+                        if (typeof window.findAndHighlightTask === 'function') {
+                            window.findAndHighlightTask(taskUuid, 50, 0);
+                        }
+                        if (callback) callback(true);
+                    }, 800);
+                });
+            } else {
+                logError('[ENSURE_VISIBLE] expandParentsChainInDom not defined');
+                if (callback) callback(false);
+            }
+        } else {
+            logError('[ENSURE_VISIBLE] Task not found:', data.error);
+            if (callback) callback(false);
+        }
+    })
+    .catch(function(err) {
+        logError('[ENSURE_VISIBLE] Error:', err);
+        if (callback) callback(false);
+    });
+}
+// ==================== BLOCK END: ensureTaskVisible v1.1 ====================
+
+
 // ==================== BLOCK START: Final initialization v5.3 (COMPLETE FIX) ====================
 // ver.5.3 (2026-06-11) - ПОЛНОСТЬЮ ИСПРАВЛЕНА ЛОГИКА ПЕРЕХОДА ПО ССЫЛКЕ
 // - Добавлена недостающая функция expandParentsChainInDom
@@ -5925,122 +6402,7 @@ document.addEventListener('DOMContentLoaded', function() {
     updateStatusFilter();
     updateAssigneeFilter();
     
-    // ========== v5.3: Функция раскрытия цепочки родителей ==========
-    window.expandParentsChainInDom = function(parentChain, targetTaskUuid, callback) {
-        if (!parentChain || parentChain.length === 0) {
-            logDebug('[EXPAND_CHAIN] No parents to expand, searching for task:', targetTaskUuid);
-            if (callback) callback();
-            return;
-        }
-        
-        var index = 0;
-        var maxAttempts = 30;
-        
-        function expandNext() {
-            if (index >= parentChain.length) {
-                logDebug('[EXPAND_CHAIN] All parents expanded, searching for task:', targetTaskUuid);
-                if (callback) callback();
-                return;
-            }
-            
-            var parentId = parentChain[index];
-            logDebug('[EXPAND_CHAIN] Expanding parent', index + 1, 'of', parentChain.length, ':', parentId);
-            
-            // Ждём появления родителя в DOM
-            var attempts = 0;
-            
-            function waitForParent() {
-                var parentElement = document.querySelector('.flat-task-item[data-task-uuid="' + parentId + '"]');
-                if (parentElement) {
-                    logDebug('[EXPAND_CHAIN] Parent element found:', parentId);
-                    
-                    var childrenDiv = document.getElementById('children-' + parentId);
-                    if (!childrenDiv) {
-                        logDebug('[EXPAND_CHAIN] Children container not found for:', parentId);
-                        index++;
-                        expandNext();
-                        return;
-                    }
-                    
-                    if (childrenDiv.classList.contains('expanded') && childrenDiv.getAttribute('data-loaded') === 'true') {
-                        logDebug('[EXPAND_CHAIN] Container already expanded and loaded for:', parentId);
-                        index++;
-                        expandNext();
-                        return;
-                    }
-                    
-                    // Раскрываем контейнер
-                    if (!childrenDiv.classList.contains('expanded')) {
-                        childrenDiv.classList.add('expanded');
-                        logDebug('[EXPAND_CHAIN] Expanded container for:', parentId);
-                    }
-                    
-                    // Если подзадачи ещё не загружены - загружаем
-                    if (childrenDiv.getAttribute('data-loaded') !== 'true') {
-                        var loadingDiv = childrenDiv.querySelector('.subtasks-loading');
-                        if (loadingDiv) loadingDiv.style.display = 'block';
-                        
-                        logDebug('[EXPAND_CHAIN] Loading subtasks for parent:', parentId);
-                        loadSubtasks(parentId, 'children-' + parentId, 1, false).then(function() {
-                            if (loadingDiv) loadingDiv.style.display = 'none';
-                            logDebug('[EXPAND_CHAIN] Subtasks loaded for parent:', parentId);
-                            index++;
-                            setTimeout(expandNext, 300);
-                        }).catch(function(err) {
-                            logDebug('[EXPAND_CHAIN] Failed to load subtasks:', err);
-                            if (loadingDiv) loadingDiv.style.display = 'none';
-                            index++;
-                            setTimeout(expandNext, 500);
-                        });
-                    } else {
-                        logDebug('[EXPAND_CHAIN] Subtasks already loaded for parent:', parentId);
-                        index++;
-                        setTimeout(expandNext, 200);
-                    }
-                } else {
-                    attempts++;
-                    if (attempts < maxAttempts) {
-                        logDebug('[EXPAND_CHAIN] Waiting for parent element:', parentId, 'attempt', attempts);
-                        setTimeout(waitForParent, 200);
-                    } else {
-                        logDebug('[EXPAND_CHAIN] Parent element not found after max attempts:', parentId);
-                        index++;
-                        expandNext();
-                    }
-                }
-            }
-            
-            waitForParent();
-        }
-        
-        expandNext();
-    };
-    
-    function findAndHighlightTask(taskUuid, maxAttempts, attempt) {
-        attempt = attempt || 0;
-        maxAttempts = maxAttempts || 50;
-        
-        logDebug('[FIND_TASK] Attempt', attempt + 1, 'of', maxAttempts, 'for task:', taskUuid);
-        
-        var taskElement = document.querySelector('.flat-task-item[data-task-uuid="' + taskUuid + '"], .subtask-item[data-task-uuid="' + taskUuid + '"]');
-        
-        if (taskElement) {
-            logDebug('[FIND_TASK] Task found! Highlighting and scrolling...');
-            highlightAndScrollToTask(taskElement);
-            return true;
-        }
-        
-        if (attempt < maxAttempts) {
-            var delay = Math.min(500, 100 + attempt * 30);
-            setTimeout(function() {
-                findAndHighlightTask(taskUuid, maxAttempts, attempt + 1);
-            }, delay);
-            return false;
-        }
-        
-        logDebug('[FIND_TASK] Task not found after', maxAttempts, 'attempts:', taskUuid);
-        return false;
-    }
+
     
     // ========== ОБРАБОТЧИК ЗАДАЧИ ИЗ URL ==========
     if (taskUuid) {
@@ -6137,6 +6499,47 @@ window.addEventListener('popstate', function(event) {
 });
 // ==================== BLOCK END: Final initialization v5.3 ====================
 
+
+// ==================== BLOCK START: ensureSubtaskHandlers v1.0 ====================
+// Автоматически привязывает обработчики к новым кнопкам подзадач
+
+function ensureSubtaskHandlers() {
+    var toggles = document.querySelectorAll('.subtasks-toggle');
+    var needsUpdate = false;
+    
+    for (var i = 0; i < toggles.length; i++) {
+        if (!toggles[i]._subtaskHandler) {
+            needsUpdate = true;
+            break;
+        }
+    }
+    
+    if (needsUpdate) {
+        logDebug('[ENSURE_HANDLERS] Re-attaching handlers for subtask toggles');
+        attachSubtaskToggleHandlers();
+    }
+}
+
+// Наблюдатель за изменениями DOM
+var observer = new MutationObserver(function(mutations) {
+    var shouldCheck = false;
+    for (var i = 0; i < mutations.length; i++) {
+        if (mutations[i].type === 'childList' && mutations[i].addedNodes.length > 0) {
+            shouldCheck = true;
+            break;
+        }
+    }
+    if (shouldCheck) {
+        setTimeout(ensureSubtaskHandlers, 100);
+    }
+});
+
+// Запускаем наблюдатель после загрузки страницы
+setTimeout(function() {
+    observer.observe(document.body, { childList: true, subtree: true });
+    ensureSubtaskHandlers();
+}, 1000);
+// ==================== BLOCK END: ensureSubtaskHandlers v1.0 ====================
 
 </script>
 
