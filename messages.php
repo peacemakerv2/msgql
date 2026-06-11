@@ -646,6 +646,127 @@ function get_project_tasks_for_messenger($project_uuid) {
 }
 // ==================== BLOCK END: get_project_tasks_for_messenger v2.3 ====================
 
+// ==================== BLOCK START: get_latest_task_with_unread v2.0 ====================
+// ver.1.0 (2026-06-11) - Функция для получения последней задачи с непрочитанными сообщениями
+// ver.2.0 (2026-06-11) - Приоритет: сначала задачи с непрочитанными сообщениями,
+//                        потом последние активные задачи
+// - Возвращает информацию о задаче с непрочитанным сообщением (самое позднее)
+// - Если нет непрочитанных, возвращает задачу с последним сообщением (старое поведение)
+function get_latest_task_with_unread(string $user_uuid, bool $is_admin, mysqli $db): ?array {
+    log_debug("[GET_LATEST_TASK_UNREAD] v2.0 - User: {$user_uuid}, is_admin: " . ($is_admin ? 'true' : 'false'));
+    
+    // ПРИОРИТЕТ 1: Задача с самым поздним НЕПРОЧИТАННЫМ сообщением
+    if ($is_admin) {
+        $sql = "
+            SELECT DISTINCT t.uuid, t.title, t.project_uuid, p.title as project_title,
+                   m.time as last_message_time
+            FROM messages m
+            JOIN tasks t ON m.task_uuid = t.uuid
+            JOIN projects p ON t.project_uuid = p.uuid
+            WHERE m.is_read = 0 AND m.user_uuid != ?
+            ORDER BY m.time DESC
+            LIMIT 1
+        ";
+        $stmt = $db->prepare($sql);
+        if (!$stmt) {
+            log_error("[GET_LATEST_TASK_UNREAD] Prepare failed: " . $db->error);
+            return null;
+        }
+        $stmt->bind_param("s", $user_uuid);
+    } else {
+        $sql = "
+            SELECT DISTINCT t.uuid, t.title, t.project_uuid, p.title as project_title,
+                   m.time as last_message_time
+            FROM messages m
+            JOIN tasks t ON m.task_uuid = t.uuid
+            JOIN projects p ON t.project_uuid = p.uuid
+            LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ?
+            WHERE m.is_read = 0 AND m.user_uuid != ?
+            AND (p.created_by_uuid = ? OR t.assigned_to_uuid = ? OR upp.can_view = 1)
+            ORDER BY m.time DESC
+            LIMIT 1
+        ";
+        $stmt = $db->prepare($sql);
+        if (!$stmt) {
+            log_error("[GET_LATEST_TASK_UNREAD] Prepare failed: " . $db->error);
+            return null;
+        }
+        $stmt->bind_param("ssss", $user_uuid, $user_uuid, $user_uuid, $user_uuid);
+    }
+    
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $task_with_unread = $result->fetch_assoc();
+    $stmt->close();
+    
+    if ($task_with_unread) {
+        log_debug("[GET_LATEST_TASK_UNREAD] Found task with unread message: {$task_with_unread['uuid']} - {$task_with_unread['title']}");
+        return [
+            'uuid' => $task_with_unread['uuid'],
+            'title' => $task_with_unread['title'],
+            'project_uuid' => $task_with_unread['project_uuid'],
+            'project_title' => $task_with_unread['project_title']
+        ];
+    }
+    
+    log_debug("[GET_LATEST_TASK_UNREAD] No unread messages found, falling back to latest active task");
+    
+    // ПРИОРИТЕТ 2: Последняя задача с сообщениями (старое поведение)
+    if ($is_admin) {
+        $sql = "
+            SELECT t.uuid, t.title, t.project_uuid, p.title as project_title,
+                   MAX(m.time) as last_message_time
+            FROM tasks t
+            JOIN messages m ON t.uuid = m.task_uuid
+            JOIN projects p ON t.project_uuid = p.uuid
+            GROUP BY t.uuid
+            ORDER BY last_message_time DESC
+            LIMIT 1
+        ";
+        $stmt = $db->prepare($sql);
+    } else {
+        $sql = "
+            SELECT t.uuid, t.title, t.project_uuid, p.title as project_title,
+                   MAX(m.time) as last_message_time
+            FROM tasks t
+            JOIN messages m ON t.uuid = m.task_uuid
+            JOIN projects p ON t.project_uuid = p.uuid
+            LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ?
+            WHERE (p.created_by_uuid = ? OR upp.can_view = 1)
+            GROUP BY t.uuid
+            ORDER BY last_message_time DESC
+            LIMIT 1
+        ";
+        $stmt = $db->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param("ss", $user_uuid, $user_uuid);
+        }
+    }
+    
+    if (!$stmt) {
+        log_error("[GET_LATEST_TASK_UNREAD] Fallback prepare failed: " . $db->error);
+        return null;
+    }
+    
+    $stmt->execute();
+    $last_active = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    
+    if ($last_active) {
+        log_debug("[GET_LATEST_TASK_UNREAD] Fallback - latest active task: {$last_active['uuid']} - {$last_active['title']}");
+        return [
+            'uuid' => $last_active['uuid'],
+            'title' => $last_active['title'],
+            'project_uuid' => $last_active['project_uuid'],
+            'project_title' => $last_active['project_title']
+        ];
+    }
+    
+    log_debug("[GET_LATEST_TASK_UNREAD] No tasks found at all");
+    return null;
+}
+// ==================== BLOCK END: get_latest_task_with_unread v2.0 ====================
+
 
 // ==================== AJAX ОБРАБОТЧИК ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -1831,6 +1952,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
+// ==================== BLOCK START: Projects sorting and task selection with unread priority v2.0 ====================
+// ver.1.0 - Базовая версия (сортировка проектов)
+// ver.2.0 (2026-06-11) - ДОБАВЛЕН ПРИОРИТЕТ: сначала непрочитанные сообщения,
+//                        потом последние активные задачи
+// - Сохранена сортировка проектов
+// - Добавлена функция get_latest_task_with_unread() для определения приоритетной задачи
+// - Сохранена поддержка URL-параметров task и message
+// - Добавлено подробное логирование
+
 // ==================== ПОДГОТОВКА ДАННЫХ ДЛЯ ШАБЛОНА ====================
 
 $projects = msgql_get_accessible_projects($current_user_uuid);
@@ -1905,6 +2035,10 @@ $projects = $sorted_projects;
 
 $selected_task_uuid = isset($_GET['task']) ? $_GET['task'] : '';
 $selected_message_uuid = isset($_GET['message']) ? $_GET['message'] : '';
+$selected_project_uuid = null;
+$scroll_to_message = null;
+
+log_debug("[INIT] URL parameters - task: {$selected_task_uuid}, message: {$selected_message_uuid}");
 
 // ==================== BLOCK START: Debug logging for message parameter ====================
 if (!empty($selected_message_uuid)) {
@@ -1937,54 +2071,158 @@ if (!empty($selected_message_uuid)) {
 }
 // ==================== BLOCK END: Debug logging for message parameter ====================
 
+// ==================== BLOCK START: Task selection with unread priority v2.0 ====================
+// ver.1.0 - Базовая версия (последнее сообщение)
+// ver.2.0 (2026-06-11) - ДОБАВЛЕН ПРИОРИТЕТ: сначала непрочитанные сообщения,
+//                        потом последние активные задачи
 
-$selected_project_uuid = null;
-$scroll_to_message = null;
+log_debug("[INIT_TASK] ========== START TASK SELECTION v2.0 ==========");
 
-log_debug("[INIT] URL parameters - task: {$selected_task_uuid}, message: {$selected_message_uuid}");
-
+// ПРИОРИТЕТ 1: Прямая ссылка на сообщение (через параметр message)
 if (!empty($selected_message_uuid)) {
+    log_debug("[INIT_TASK] Processing message parameter: {$selected_message_uuid}");
     $stmt = $db->prepare("SELECT task_uuid FROM messages WHERE uuid = ?");
     $stmt->bind_param("s", $selected_message_uuid);
     $stmt->execute();
     $msg_info = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    
     if ($msg_info && msgql_can_access_task($current_user_uuid, $msg_info['task_uuid'], 'view')) {
         $selected_task_uuid = $msg_info['task_uuid'];
         $scroll_to_message = $selected_message_uuid;
-        log_debug("[INIT] Message found, set task_uuid: {$selected_task_uuid}");
+        log_debug("[INIT_TASK] Message found, set task_uuid: {$selected_task_uuid}");
     } else {
         $scroll_to_message = null;
         if (!isset($_SESSION['flash_message'])) {
             $_SESSION['flash_message'] = 'Сообщение не найдено или было удалено';
             $_SESSION['flash_type'] = 'warning';
         }
-        log_debug("[INIT] Message not found or no access");
+        log_debug("[INIT_TASK] Message not found or no access");
     }
 }
 
+// ПРИОРИТЕТ 2: Прямая ссылка на задачу (через параметр task)
 if (empty($selected_task_uuid)) {
-    log_debug("[INIT] No task selected, finding latest task with messages");
+    $selected_task_uuid = '';
+}
+
+if (!empty($selected_task_uuid)) {
+    log_debug("[INIT_TASK] Using task from URL parameter: {$selected_task_uuid}");
+    
+    $taskStmt = $db->prepare("SELECT project_uuid FROM tasks WHERE uuid = ?");
+    $taskStmt->bind_param("s", $selected_task_uuid);
+    $taskStmt->execute();
+    $taskInfo = $taskStmt->get_result()->fetch_assoc();
+    $taskStmt->close();
+    
+    if ($taskInfo && msgql_can_access_task($current_user_uuid, $selected_task_uuid, 'view')) {
+        $selected_project_uuid = $taskInfo['project_uuid'];
+        log_debug("[INIT_TASK] Task access confirmed, project_uuid: {$selected_project_uuid}");
+    } else {
+        log_warning("[INIT_TASK] Task not accessible: {$selected_task_uuid}, resetting");
+        $selected_task_uuid = '';
+        $selected_project_uuid = null;
+    }
+}
+
+// ПРИОРИТЕТ 3: Выбор задачи с непрочитанными сообщениями (НОВОЕ ПОВЕДЕНИЕ)
+if (empty($selected_task_uuid)) {
+    log_debug("[INIT_TASK] No task in URL, checking for tasks with unread messages");
+    
+    // Получаем актуальное количество непрочитанных сообщений
+    $unread_count = get_unread_count($current_user_uuid, $is_admin, $db);
+    log_debug("[INIT_TASK] Current unread count: {$unread_count}");
+    
+    // Проверяем, нужно ли показывать flash-сообщение и выбирать задачу с непрочитанными
+    $should_show_flash = false;
+    $unread_task = null;
+    
+    if ($unread_count > 0) {
+        if (function_exists('get_latest_task_with_unread')) {
+            $unread_task = get_latest_task_with_unread($current_user_uuid, $is_admin, $db);
+            $should_show_flash = ($unread_task !== null && !empty($unread_task['uuid']));
+        } else {
+            log_warning("[INIT_TASK] get_latest_task_with_unread not found, using fallback");
+        }
+    } else {
+        log_debug("[INIT_TASK] No unread messages, skipping flash message");
+        // Очищаем flash-сообщение из сессии, если оно там осталось
+        if (isset($_SESSION['flash_message']) && strpos($_SESSION['flash_message'], 'непрочитанные сообщения') !== false) {
+            unset($_SESSION['flash_message']);
+            unset($_SESSION['flash_type']);
+            log_debug("[INIT_TASK] Cleaned stale flash message from session");
+        }
+    }
+    
+    if ($should_show_flash && $unread_task && !empty($unread_task['uuid'])) {
+        $selected_task_uuid = $unread_task['uuid'];
+        $selected_project_uuid = $unread_task['project_uuid'];
+        log_debug("[INIT_TASK] ✅ Selected task with unread messages: {$selected_task_uuid} - {$unread_task['title']}");
+        
+        // Показываем flash-сообщение ТОЛЬКО если оно ещё не было показано в этой сессии
+        $flash_shown_key = 'flash_unread_shown_' . $unread_task['uuid'];
+        if (!isset($_SESSION[$flash_shown_key])) {
+            $_SESSION['flash_message'] = "📬 У вас есть непрочитанные сообщения в задаче \"{$unread_task['title']}\"";
+            $_SESSION['flash_type'] = 'info';
+            $_SESSION[$flash_shown_key] = time();
+            log_debug("[INIT_TASK] Flash message set for task: {$unread_task['title']}");
+        } else {
+            log_debug("[INIT_TASK] Flash message already shown for this task, skipping");
+        }
+    } else {
+        log_debug("[INIT_TASK] No unread messages found, looking for latest active task");
+    }
+}
+
+// ПРИОРИТЕТ 4: Последняя активная задача (старое поведение - fallback)
+if (empty($selected_task_uuid)) {
+    log_debug("[INIT_TASK] Finding latest active task with messages");
+    
     if ($is_admin) {
-        $stmt = $db->prepare("SELECT t.uuid, t.project_uuid, MAX(m.time) as last_msg_time FROM tasks t JOIN messages m ON t.uuid = m.task_uuid GROUP BY t.uuid ORDER BY last_msg_time DESC LIMIT 1");
+        $stmt = $db->prepare("SELECT t.uuid, t.project_uuid, MAX(m.time) as last_msg_time 
+                              FROM tasks t 
+                              JOIN messages m ON t.uuid = m.task_uuid 
+                              GROUP BY t.uuid 
+                              ORDER BY last_msg_time DESC 
+                              LIMIT 1");
         $stmt->execute();
         $latest = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
     } else {
-        $stmt = $db->prepare("SELECT t.uuid, t.project_uuid, MAX(m.time) as last_msg_time FROM tasks t JOIN messages m ON t.uuid = m.task_uuid JOIN projects p ON t.project_uuid = p.uuid LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ? WHERE (p.created_by_uuid = ? OR upp.can_view = 1) GROUP BY t.uuid ORDER BY last_msg_time DESC LIMIT 1");
+        $stmt = $db->prepare("SELECT t.uuid, t.project_uuid, MAX(m.time) as last_msg_time 
+                              FROM tasks t 
+                              JOIN messages m ON t.uuid = m.task_uuid 
+                              JOIN projects p ON t.project_uuid = p.uuid 
+                              LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ? 
+                              WHERE (p.created_by_uuid = ? OR upp.can_view = 1) 
+                              GROUP BY t.uuid 
+                              ORDER BY last_msg_time DESC 
+                              LIMIT 1");
         $stmt->bind_param("ss", $current_user_uuid, $current_user_uuid);
         $stmt->execute();
         $latest = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
     }
     
     if ($latest && msgql_can_access_task($current_user_uuid, $latest['uuid'], 'view')) {
         $selected_task_uuid = $latest['uuid'];
         $selected_project_uuid = $latest['project_uuid'];
-        log_debug("[INIT] Selected latest active task: {$selected_task_uuid}");
+        log_debug("[INIT_TASK] Fallback - selected latest active task: {$selected_task_uuid}");
     } else {
-        log_debug("[INIT] No latest task found");
+        log_debug("[INIT_TASK] No latest active task found, user has no accessible messages");
     }
 }
 
-if ($selected_task_uuid && !$selected_project_uuid) {
+// Получаем project_title для выбранной задачи (если есть)
+if ($selected_task_uuid && $selected_project_uuid) {
+    $proj_stmt = $db->prepare("SELECT title FROM projects WHERE uuid = ?");
+    $proj_stmt->bind_param("s", $selected_project_uuid);
+    $proj_stmt->execute();
+    $proj_title = $proj_stmt->get_result()->fetch_assoc();
+    $proj_stmt->close();
+    log_debug("[INIT_TASK] Final selection - task: {$selected_task_uuid}, project: {$selected_project_uuid}, project_title: " . ($proj_title['title'] ?? 'unknown'));
+} elseif ($selected_task_uuid && !$selected_project_uuid) {
+    // Fallback: ищем проект по задаче через tasks_by_project
     foreach ($tasks_by_project as $pu => $ts) {
         foreach ($ts as $t) {
             if ($t['uuid'] === $selected_task_uuid) {
@@ -1993,8 +2231,11 @@ if ($selected_task_uuid && !$selected_project_uuid) {
             }
         }
     }
-    log_debug("[INIT] Found project for task: {$selected_project_uuid}");
+    log_debug("[INIT_TASK] Found project for task via fallback: {$selected_project_uuid}");
 }
+
+log_debug("[INIT_TASK] ========== END TASK SELECTION ==========");
+// ==================== BLOCK END: Task selection with unread priority v2.0 ====================
 
 $lastMessageTime = 0;
 if (!empty($selected_task_uuid)) {
@@ -8242,6 +8483,93 @@ window.appendNewMessages = function(messages, isNewMessageFromUser) {
     updateUnreadBadge();
 };
 
+// ==================== BLOCK START: Auto-hide flash message on unread clear v1.0 ====================
+// ver.1.0 (2026-06-11) - Автоматическое скрытие flash-сообщения о непрочитанных сообщениях
+// - При получении события unread_update с count=0 скрываем flash-сообщение
+// - При ручном прочтении всех сообщений также скрываем
+// - Удаляем флаг из sessionStorage, чтобы сообщение не появлялось снова
+
+(function() {
+    'use strict';
+    
+    // Функция для скрытия flash-сообщения
+    function hideUnreadFlashMessage() {
+        var flashElement = document.querySelector('.flash-message, .custom-alert');
+        if (flashElement && flashElement.textContent && flashElement.textContent.includes('непрочитанные сообщения')) {
+            logDebug('[FLASH_AUTO_HIDE] Hiding unread flash message');
+            flashElement.style.animation = 'fadeOut 0.3s ease forwards';
+            setTimeout(function() {
+                if (flashElement && flashElement.parentNode) {
+                    flashElement.remove();
+                }
+            }, 300);
+        }
+    }
+    
+    // Слушаем событие unread_update от SSE
+    if (window.SSE && typeof window.SSE === 'object') {
+        // Сохраняем оригинальный обработчик, если он есть
+        var originalUnreadHandler = null;
+        
+        // Переопределяем или добавляем обработчик unread_update
+        if (window.eventSource) {
+            window.eventSource.addEventListener('unread_update', function(e) {
+                try {
+                    var data = JSON.parse(e.data);
+                    logDebug('[FLASH_AUTO_HIDE] unread_update received, count:', data.count);
+                    if (data.count === 0) {
+                        hideUnreadFlashMessage();
+                        // Также очищаем флаг в sessionStorage, чтобы сообщение не появилось при следующей загрузке
+                        sessionStorage.removeItem('flash_unread_shown');
+                    }
+                } catch(err) {
+                    logDebug('[FLASH_AUTO_HIDE] Error parsing unread_update:', err);
+                }
+            });
+        }
+    }
+    
+    // Также проверяем при загрузке страницы, если нет непрочитанных - скрываем сообщение
+    function checkAndHideFlashOnLoad() {
+        var csrfToken = window.csrfToken || '';
+        fetch(window.APP_BASE + '/get_badges_data.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'csrf_token=' + encodeURIComponent(csrfToken)
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success && data.badges) {
+                var unreadMessages = data.badges.messages || 0;
+                logDebug('[FLASH_AUTO_HIDE] On load - unread messages:', unreadMessages);
+                if (unreadMessages === 0) {
+                    hideUnreadFlashMessage();
+                }
+            }
+        })
+        .catch(function(err) {
+            logDebug('[FLASH_AUTO_HIDE] Error checking unread count:', err);
+        });
+    }
+    
+    // Запускаем проверку после загрузки DOM
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(checkAndHideFlashOnLoad, 1000);
+        });
+    } else {
+        setTimeout(checkAndHideFlashOnLoad, 1000);
+    }
+    
+    // Также при возвращении на вкладку проверяем
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            setTimeout(checkAndHideFlashOnLoad, 500);
+        }
+    });
+})();
+// ==================== BLOCK END: Auto-hide flash message on unread clear v1.0 ====================
+
 window.updateMessageInCache = function(uuid, newData) {
     var el = document.querySelector('.message[data-uuid="' + uuid + '"]');
     if (el && newData) {
@@ -10767,6 +11095,36 @@ function renderTaskDetails(task) {
         descrHtml = '<div class="task-details-description-empty">Нет описания</div>';
     }
     
+    // ========== v5.3: ПОКАЗЫВАЕМ РОДИТЕЛЬСКИЕ ЗАДАЧИ ==========
+    var parentsHtml = '';
+    var parentChain = task.parent_chain || [];
+    var parentTasks = task.parent_tasks || {};
+    
+    if (parentChain.length > 0) {
+        parentsHtml = '<div class="task-details-field">';
+        parentsHtml += '<div class="task-details-field-label">📁 Родительские задачи</div>';
+        parentsHtml += '<div class="task-details-field-value">';
+        
+        for (var i = 0; i < parentChain.length; i++) {
+            var parentUuid = parentChain[i];
+            var parentData = parentTasks[parentUuid];
+            var parentTitle = parentData ? parentData.title : 'Задача';
+            var isCompleted = parentData ? (parentData.status === 1) : false;
+            var completedClass = isCompleted ? ' style="text-decoration: line-through; opacity: 0.7;"' : '';
+            var parentLink = window.location.origin + (window.APP_BASE || '') + '/projects.php?task=' + parentUuid;
+            
+            parentsHtml += '<div style="margin-bottom: 8px; padding-left: ' + (i * 20) + 'px;">';
+            parentsHtml += '<span style="color: #9bb7ff;">↳</span> ';
+            parentsHtml += '<a href="' + parentLink + '" target="_blank" rel="noopener noreferrer" style="color: #e9eefc; text-decoration: none; border-bottom: 1px dashed #4f7cff;"' + completedClass + '>';
+            parentsHtml += escapeHtml(parentTitle);
+            parentsHtml += '</a>';
+            parentsHtml += '</div>';
+        }
+        
+        parentsHtml += '</div></div>';
+        logDebug('[TASK_DETAILS] Added parents HTML with ' + parentChain.length + ' parents');
+    }
+    
     // Формируем HTML для файлов
     var filesHtml = '';
     var files = task.files || [];
@@ -10793,6 +11151,12 @@ function renderTaskDetails(task) {
     var taskUrl = window.location.origin + (window.APP_BASE || '') + '/projects.php?task=' + task.uuid;
     
     var html = '';
+    
+    // ДОБАВЛЯЕМ БЛОК С РОДИТЕЛЯМИ (после статуса и исполнителя, перед описанием)
+    if (parentsHtml) {
+        html += parentsHtml;
+    }
+    
     html += '<div class="task-details-field">';
     html += '<div class="task-details-field-label">📋 Статус</div>';
     html += '<div class="task-details-field-value ' + statusClass + '">' + statusText + '</div>';
