@@ -3808,6 +3808,117 @@ body > .mobile-drawer-toggle {
 /* ==================== BLOCK END: Edit Message Modal Styles v8.32 ==================== */
 
 
+/* ==================== BLOCK START: Task details edit form styles v1.0 ==================== */
+/* ver.1.0 (2026-06-14) - Стили для формы редактирования задачи в панели деталей */
+
+.task-details-textarea,
+.task-details-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: #0b1020;
+    color: #e9eefc;
+    font-size: 14px;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+.task-details-textarea:focus,
+.task-details-input:focus {
+    outline: none;
+    border-color: #4f7cff;
+}
+
+#task-details-file-manager {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#task-details-file-manager label {
+    display: block;
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #9bb7ff;
+}
+
+#task-details-files-list {
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+#task-details-file-manager .upload-area {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+#task-details-file-manager .upload-area input[type="file"] {
+    flex: 1;
+    background: #0b1020;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #e9eefc;
+    font-size: 13px;
+}
+
+#task-details-file-manager .upload-area button {
+    white-space: nowrap;
+}
+
+/* Стили для кнопок в панели деталей */
+.task-details-btn-primary,
+.task-details-btn-secondary {
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+}
+
+.task-details-btn-primary {
+    background: #4f7cff;
+    color: white;
+}
+
+.task-details-btn-primary:hover {
+    background: #3b6ef5;
+    transform: translateY(-1px);
+}
+
+.task-details-btn-secondary {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #e9eefc;
+}
+
+.task-details-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+#task-details-view-actions,
+#task-details-edit-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    flex-wrap: wrap;
+}
+
+/* ==================== BLOCK END: Task details edit form styles v1.0 ==================== */
+
 </style>
 </head>
 <body>
@@ -3832,9 +3943,11 @@ window.lastMessageTime = <?= (int)$lastMessageTime ?>;
 window.MESSAGES_PER_PAGE = <?= (int)$per_page ?>;
 
 // ==================== BLOCK START: Global task details variables v1.0 ====================
-// ver.1.0 (2026-06-11) - Глобальные переменные для панели деталей задачи
 window.taskDetailsPanelOpen = false;
 window.currentTaskDetailsUuid = null;
+window.currentTaskDetailsCleanTitle = null;  // ЧИСТЫЙ заголовок (без [число]) для сохранения
+window.projectUsersList = null;
+window.projectUsersListProjectUuid = null;
 // ==================== BLOCK END: Global task details variables v1.0 ====================
 
 logDebug('[INIT] currentUserIsAdmin:', window.currentUserIsAdmin);
@@ -3895,6 +4008,47 @@ function updateGlobalBadge(count) {
     }
     updateUnreadBadge();
 }
+
+// ==================== BLOCK START: showAlert function v1.0 ====================
+// ver.1.0 (2026-06-14) - Функция для отображения алертов/уведомлений
+// Используется в saveTaskDetails, uploadTaskFileFromDetails и других функциях
+// - Поддерживает типы: success, error, warning, info
+// - Использует существующую функцию showToast если доступна
+// - Fallback: alert для ошибок
+
+function showAlert(message, type) {
+    logDebug('[ALERT] showAlert called:', message, 'type:', type);
+    
+    // Приоритет 1: использовать существующую showToast
+    if (typeof showToast === 'function') {
+        showToast(message, type);
+        return;
+    }
+    
+    // Приоритет 2: для ошибок используем стандартный alert
+    if (type === 'error') {
+        alert('❌ ' + message);
+        return;
+    }
+    
+    // Приоритет 3: создаём временное уведомление
+    var toast = document.createElement('div');
+    toast.textContent = message;
+    
+    var bgColor = '#10b981';
+    if (type === 'error') bgColor = '#dc2626';
+    else if (type === 'warning') bgColor = '#f59e0b';
+    else if (type === 'info') bgColor = '#3b82f6';
+    
+    toast.style.cssText = 'position:fixed; bottom:20px; right:20px; background:' + bgColor + '; color:white; padding:10px 20px; border-radius:8px; z-index:10000; font-size:14px; animation:slideInRight 0.3s ease;';
+    document.body.appendChild(toast);
+    
+    setTimeout(function() {
+        toast.style.animation = 'slideOutRight 0.3s ease';
+        setTimeout(function() { if (toast && toast.parentNode) toast.remove(); }, 300);
+    }, 3000);
+}
+// ==================== BLOCK END: showAlert function v1.0 ====================
 
 function updateUnreadBadge() {
     var unreadMessages = document.querySelectorAll('.message.unread:not(.own)').length;
@@ -5335,6 +5489,13 @@ function updateSidebarTasks(projectUuid, tasks) {
         return;
     }
     
+    // ========== ИСПРАВЛЕНИЕ: Удаляем ВСЕ существующие счётчики перед обновлением ==========
+    var existingSpans = tasksList.querySelectorAll('.task-title span');
+    existingSpans.forEach(function(span) {
+        span.remove();
+    });
+    // ====================================================================================
+    
     // Сохраняем активную задачу
     var activeTaskUuid = window.currentTaskUuid;
     logDebug('[SIDEBAR_REFRESH_v8.37] Active task UUID:', activeTaskUuid);
@@ -5380,6 +5541,7 @@ function updateSidebarTasks(projectUuid, tasks) {
     logDebug('[SIDEBAR_REFRESH_v8.37] Sidebar updated for project:', projectUuid, 'tasks:', tasks.length);
 }
 
+
 function updateMobileSidebarTasks(projectUuid, tasks) {
     var mobileProjectElement = document.querySelector('#mobile-drawer-panel .project-item[data-project-uuid="' + projectUuid + '"]');
     if (!mobileProjectElement) {
@@ -5392,6 +5554,13 @@ function updateMobileSidebarTasks(projectUuid, tasks) {
         logDebug('[SIDEBAR_REFRESH_v8.37] Mobile tasks list not found');
         return;
     }
+    
+    // ========== ИСПРАВЛЕНИЕ: Удаляем ВСЕ существующие счётчики перед обновлением ==========
+    var existingSpans = mobileTasksList.querySelectorAll('.task-title span');
+    existingSpans.forEach(function(span) {
+        span.remove();
+    });
+    // ====================================================================================
     
     var activeTaskUuid = window.currentTaskUuid;
     
@@ -10098,24 +10267,24 @@ window.refreshPaginationAfterMutation = function(mutationType, affectedMessageUu
             window.pagination.totalPages = Math.ceil(window.pagination.totalMessages / window.MESSAGES_PER_PAGE);
         }
         
-        // Обновляем счётчик в сайдбаре
-        var taskElement = document.querySelector('.task-item[data-task-uuid="' + window.currentTaskUuid + '"]');
-        if (taskElement) {
-            var totalMessages = window.pagination ? window.pagination.totalMessages : 0;
-            var countSpan = taskElement.querySelector('.task-title span');
-            if (totalMessages > 0) {
-                if (countSpan) {
-                    countSpan.textContent = '[' + totalMessages + ']';
-                } else {
-                    var titleSpan = taskElement.querySelector('.task-title');
-                    if (titleSpan) {
-                        titleSpan.insertAdjacentHTML('beforeend', '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + totalMessages + ']</span>');
-                    }
-                }
-            } else if (countSpan) {
-                countSpan.remove();
-            }
-        }
+        // // Обновляем счётчик в сайдбаре
+        // var taskElement = document.querySelector('.task-item[data-task-uuid="' + window.currentTaskUuid + '"]');
+        // if (taskElement) {
+        //     var totalMessages = window.pagination ? window.pagination.totalMessages : 0;
+        //     var countSpan = taskElement.querySelector('.task-title span');
+        //     if (totalMessages > 0) {
+        //         if (countSpan) {
+        //             countSpan.textContent = '[' + totalMessages + ']';
+        //         } else {
+        //             var titleSpan = taskElement.querySelector('.task-title');
+        //             if (titleSpan) {
+        //                 titleSpan.insertAdjacentHTML('beforeend', '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + totalMessages + ']</span>');
+        //             }
+        //         }
+        //     } else if (countSpan) {
+        //         countSpan.remove();
+        //     }
+        // }
         
         setTimeout(function() {
             if (typeof markVisibleMessagesAsRead === 'function') {
@@ -10240,22 +10409,22 @@ if (originalSendMessage) {
                             window.pagination.totalPages = Math.ceil(window.pagination.totalMessages / window.MESSAGES_PER_PAGE);
                         }
                         
-                        // Обновляем счётчик в сайдбаре
-                        var taskElement = document.querySelector('.task-item[data-task-uuid="' + task + '"]');
-                        if (taskElement) {
-                            var newCount = window.pagination ? window.pagination.totalMessages : 0;
-                            var countSpan = taskElement.querySelector('.task-title span');
-                            if (newCount > 0) {
-                                if (countSpan) {
-                                    countSpan.textContent = '[' + newCount + ']';
-                                } else {
-                                    var titleSpan = taskElement.querySelector('.task-title');
-                                    if (titleSpan) {
-                                        titleSpan.insertAdjacentHTML('beforeend', '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + newCount + ']</span>');
-                                    }
-                                }
-                            }
-                        }
+                        // // Обновляем счётчик в сайдбаре
+                        // var taskElement = document.querySelector('.task-item[data-task-uuid="' + task + '"]');
+                        // if (taskElement) {
+                        //     var newCount = window.pagination ? window.pagination.totalMessages : 0;
+                        //     var countSpan = taskElement.querySelector('.task-title span');
+                        //     if (newCount > 0) {
+                        //         if (countSpan) {
+                        //             countSpan.textContent = '[' + newCount + ']';
+                        //         } else {
+                        //             var titleSpan = taskElement.querySelector('.task-title');
+                        //             if (titleSpan) {
+                        //                 titleSpan.insertAdjacentHTML('beforeend', '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + newCount + ']</span>');
+                        //             }
+                        //         }
+                        //     }
+                        // }
                         
                         if (d.message.time > window.lastMessageTime) {
                             window.lastMessageTime = d.message.time;
@@ -10992,7 +11161,12 @@ function formatTaskDate(ts) {
     return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) + ' (' + tzName + ')';
 }
 
-// Функция загрузки деталей задачи
+// ==================== BLOCK START: loadTaskDetails v1.3 (with project users) ====================
+// ver.1.0 - Базовая версия
+// ver.1.1 (2026-06-14) - ДОБАВЛЕНО СОХРАНЕНИЕ project_uuid
+// ver.1.2 (2026-06-14) - ДОБАВЛЕНО ЛОГГИРОВАНИЕ ДЛЯ ОТЛАДКИ
+// ver.1.3 (2026-06-14) - ДОБАВЛЕНА ЗАГРУЗКА СПИСКА ПОЛЬЗОВАТЕЛЕЙ ПРОЕКТА ДЛЯ SELECT ИСПОЛНИТЕЛЯ
+
 function loadTaskDetails(taskUuid) {
     if (!taskUuid) {
         logDebug('[TASK_DETAILS] No task UUID provided');
@@ -11022,63 +11196,188 @@ function loadTaskDetails(taskUuid) {
         addCsrfToUrlParams(formData);
     }
     
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', window.APP_BASE + '/projects.php', true);
-    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-    xhr.timeout = 30000;
-    
-    xhr.onload = function() {
+    fetch(window.APP_BASE + '/projects.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData
+    })
+    .then(function(response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+    })
+    .then(function(data) {
         taskDetailsPanel.isLoading = false;
+        logDebug('[TASK_DETAILS] Response received, success:', data.success);
         
-        if (xhr.status === 200) {
-            try {
-                var data = JSON.parse(xhr.responseText);
-                logDebug('[TASK_DETAILS] Response received, success:', data.success);
+        if (data.success && data.task) {
+            // Сохраняем данные задачи в глобальную переменную
+            window.currentTaskDetailsData = data.task;
+            window.currentTaskDetailsProjectUuid = data.task.project_uuid;
+            window.currentTaskDetailsUuid = data.task.uuid;
+            logDebug('[TASK_DETAILS] Task loaded, project_uuid:', data.task.project_uuid);
+            
+            // ========== v1.3: Загружаем список пользователей проекта для select исполнителя ==========
+            var projectUuid = data.task.project_uuid;
+            if (projectUuid && (!window.projectUsersList || window.projectUsersListProjectUuid !== projectUuid)) {
+                logDebug('[TASK_DETAILS] Loading project users for project:', projectUuid);
                 
-                if (data.success && data.task) {
-                    renderTaskDetails(data.task);
-                } else {
-                    if (bodyContainer) {
-                        bodyContainer.innerHTML = '<div class="task-details-error">❌ ' + escapeHtml(data.error || 'Задача не найдена') + '</div>';
+                var usersFormData = new URLSearchParams();
+                usersFormData.append('action', 'get_project_users');
+                usersFormData.append('project_uuid', projectUuid);
+                usersFormData.append('ajax_mode', '1');
+                if (typeof addCsrfToUrlParams === 'function') {
+                    addCsrfToUrlParams(usersFormData);
+                }
+                
+                fetch(window.APP_BASE + '/projects.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: usersFormData
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(usersData) {
+                    if (usersData.success && usersData.users) {
+                        window.projectUsersList = usersData.users;
+                        window.projectUsersListProjectUuid = projectUuid;
+                        logDebug('[TASK_DETAILS] Loaded ' + usersData.users.length + ' users for project:', projectUuid);
+                    } else {
+                        window.projectUsersList = [];
+                        window.projectUsersListProjectUuid = null;
+                        logDebug('[TASK_DETAILS] No users loaded or error:', usersData.error);
                     }
-                    logDebug('[TASK_DETAILS] Task not found or error:', data.error);
+                    // Рендерим панель после загрузки пользователей
+                    renderTaskDetails(data.task);
+                })
+                .catch(function(err) {
+                    logDebug('[TASK_DETAILS] Error loading project users:', err);
+                    window.projectUsersList = [];
+                    window.projectUsersListProjectUuid = null;
+                    // Всё равно рендерим панель, но без списка пользователей
+                    renderTaskDetails(data.task);
+                });
+            } else {
+                // Пользователи уже загружены или проект не указан
+                if (window.projectUsersList && window.projectUsersListProjectUuid === projectUuid) {
+                    logDebug('[TASK_DETAILS] Using cached project users, count:', window.projectUsersList.length);
                 }
-            } catch(e) {
-                logDebug('[TASK_DETAILS] JSON parse error:', e.message);
-                if (bodyContainer) {
-                    bodyContainer.innerHTML = '<div class="task-details-error">❌ Ошибка обработки ответа сервера</div>';
-                }
+                renderTaskDetails(data.task);
             }
         } else {
-            logDebug('[TASK_DETAILS] HTTP error:', xhr.status);
             if (bodyContainer) {
-                bodyContainer.innerHTML = '<div class="task-details-error">❌ Ошибка загрузки (HTTP ' + xhr.status + ')</div>';
+                bodyContainer.innerHTML = '<div class="task-details-error">❌ ' + escapeHtml(data.error || 'Задача не найдена') + '</div>';
             }
+            logDebug('[TASK_DETAILS] Task not found or error:', data.error);
         }
-    };
-    
-    xhr.onerror = function() {
+    })
+    .catch(function(err) {
         taskDetailsPanel.isLoading = false;
-        logDebug('[TASK_DETAILS] Network error');
+        logError('[TASK_DETAILS] Error:', err.message);
         if (bodyContainer) {
-            bodyContainer.innerHTML = '<div class="task-details-error">❌ Сетевая ошибка</div>';
+            bodyContainer.innerHTML = '<div class="task-details-error">❌ Ошибка загрузки: ' + escapeHtml(err.message) + '</div>';
         }
-    };
-    
-    xhr.ontimeout = function() {
-        taskDetailsPanel.isLoading = false;
-        logDebug('[TASK_DETAILS] Timeout');
-        if (bodyContainer) {
-            bodyContainer.innerHTML = '<div class="task-details-error">❌ Превышено время ожидания</div>';
-        }
-    };
-    
-    xhr.send(formData);
+    });
+}
+// ==================== BLOCK END: loadTaskDetails v1.3 ====================
+
+
+// ==================== BLOCK START: Helper functions for task details panel v1.0 ====================
+// ver.1.0 (2026-06-14) - ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПАНЕЛИ ДЕТАЛЕЙ ЗАДАЧИ
+// Функции скопированы из projects.php, так как они не доступны в глобальной области видимости messages.php
+
+// Преобразование UTC timestamp в локальный datetime-local формат
+function utcToLocalDatetimeString(utcTimestamp) {
+    if (!utcTimestamp || utcTimestamp === null || utcTimestamp === 0) return '';
+    var date = new Date(parseInt(utcTimestamp));
+    if (isNaN(date.getTime())) return '';
+    var year = date.getFullYear();
+    var month = String(date.getMonth() + 1).padStart(2, '0');
+    var day = String(date.getDate()).padStart(2, '0');
+    var hours = String(date.getHours()).padStart(2, '0');
+    var minutes = String(date.getMinutes()).padStart(2, '0');
+    return year + '-' + month + '-' + day + 'T' + hours + ':' + minutes;
 }
 
-// Функция рендеринга деталей задачи
+// Форматирование размера файла (копия из глобальной области)
+function formatFileSize(bytes) {
+    if (bytes === undefined || bytes === null) return '0 B';
+    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB';
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(2) + ' MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return bytes + ' B';
+}
+
+// Получение иконки файла по имени
+function getFileIconFromName(filename) {
+    if (!filename) return '📎';
+    var ext = filename.split('.').pop().toLowerCase();
+    var icons = {
+        'jpg': '🖼️', 'jpeg': '🖼️', 'png': '🖼️', 'gif': '🖼️', 'webp': '🖼️',
+        'pdf': '📄', 'doc': '📝', 'docx': '📝', 'xls': '📊', 'xlsx': '📊',
+        'zip': '📦', 'rar': '📦', '7z': '📦', 'mp3': '🎵', 'mp4': '🎬',
+        'avi': '🎬', 'txt': '📃', 'md': '📃'
+    };
+    return icons[ext] || '📎';
+}
+
+// Форматирование даты для отображения в панели
+function formatTaskDate(ts) {
+    if (!ts || ts === null || ts === 0) return '';
+    var d = new Date(parseInt(ts));
+    if (isNaN(d.getTime())) return '';
+    var tz = -d.getTimezoneOffset() / 60;
+    var tzName = tz === 3 ? 'MSK' : ((tz >= 0 ? '+' : '') + tz);
+    return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) + ' (' + tzName + ')';
+}
+
+// Парсинг ссылок в описании (безопасная версия)
+function parseTaskDetailsLinks(text) {
+    if (!text) return '';
+    
+    // Экранируем HTML
+    var div = document.createElement('div');
+    div.textContent = text;
+    var escaped = div.innerHTML;
+    
+    // URL regex
+    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
+    
+    escaped = escaped.replace(urlRegex, function(match) {
+        var lowerMatch = match.toLowerCase();
+        // Блокируем опасные схемы
+        if (lowerMatch.indexOf('javascript:') === 0 || 
+            lowerMatch.indexOf('data:') === 0 || 
+            lowerMatch.indexOf('vbscript:') === 0) {
+            logDebug('[TASK_DETAILS] Blocked dangerous URL: ' + match.substring(0, 100));
+            return match;
+        }
+        
+        var safeUrl = match.replace(/['"]/g, '').replace(/[<>]/g, '');
+        var isTelegram = lowerMatch.indexOf('tg://') === 0 || lowerMatch.indexOf('telegram://') === 0;
+        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
+        var targetAttr = (lowerMatch.indexOf('mailto:') === 0 || lowerMatch.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        
+        var displayText = match;
+        if (displayText.length > 80) {
+            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
+        }
+        
+        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + displayText + '</a>';
+    });
+    
+    // Преобразуем переносы строк в <br>
+    escaped = escaped.replace(/\n/g, '<br>');
+    
+    return escaped;
+}
+// ==================== BLOCK END: Helper functions for task details panel v1.0 ====================
+
+
+// ==================== BLOCK START: renderTaskDetails v2.3 (with assignee field) ====================
+// ver.2.2 - Базовая версия с формой редактирования
+// ver.2.3 (2026-06-14) - ДОБАВЛЕНО ПОЛЕ "ИСПОЛНИТЕЛЬ" В ФОРМУ РЕДАКТИРОВАНИЯ
+
 function renderTaskDetails(task) {
-    logDebug('[TASK_DETAILS] Rendering task details for:', task.uuid);
+    logDebug('[TASK_DETAILS] v2.3 Rendering task details for:', task.uuid);
     
     var statusText = (task.status === 1) ? '✅ Выполнена' : '🟢 Активна';
     var statusClass = (task.status === 1) ? 'completed' : '';
@@ -11089,13 +11388,53 @@ function renderTaskDetails(task) {
     var descrHtml = '';
     var descrText = task.descr || '';
     if (descrText.trim() !== '') {
-        var parsedDesc = parseTaskDetailsLinks(descrText);
-        descrHtml = '<div class="task-details-description">' + parsedDesc + '</div>';
+        descrHtml = '<div class="task-details-description">' + parseTaskDetailsLinks(descrText) + '</div>';
     } else {
         descrHtml = '<div class="task-details-description-empty">Нет описания</div>';
     }
     
-    // ========== v5.3: ПОКАЗЫВАЕМ РОДИТЕЛЬСКИЕ ЗАДАЧИ ==========
+    // Генерируем HTML для выпадающего списка исполнителей
+    var assigneeOptionsHtml = '<option value="">Не назначен</option>';
+    if (window.projectUsersList && window.projectUsersList.length > 0) {
+        for (var i = 0; i < window.projectUsersList.length; i++) {
+            var user = window.projectUsersList[i];
+            var selected = (user.uuid === task.assigned_to_uuid) ? ' selected' : '';
+            var userName = user.name || user.login;
+            assigneeOptionsHtml += '<option value="' + escapeHtml(user.uuid) + '"' + selected + '>' + escapeHtml(userName) + '</option>';
+        }
+    }
+    
+    // ========== ФОРМА РЕДАКТИРОВАНИЯ (скрыта по умолчанию) ==========
+    var editFormHtml = `
+        <div id="task-details-edit-form" style="display: none;">
+            <div class="form-group">
+                <label>Описание</label>
+                <textarea id="task-details-descr" class="task-details-textarea" rows="5">` + escapeHtml(descrText) + `</textarea>
+            </div>
+            <div class="form-group">
+                <label>Исполнитель</label>
+                <select id="task-details-assignee" class="task-details-input">` + assigneeOptionsHtml + `</select>
+            </div>
+            <div class="form-group">
+                <label>Дата начала (в вашем часовом поясе)</label>
+                <input type="datetime-local" id="task-details-time-start" class="task-details-input" value="` + utcToLocalDatetimeString(task.time_start_utc) + `">
+            </div>
+            <div class="form-group">
+                <label>Плановое окончание (в вашем часовом поясе)</label>
+                <input type="datetime-local" id="task-details-time-end" class="task-details-input" value="` + utcToLocalDatetimeString(task.time_end_plan_utc) + `">
+            </div>
+            <div class="file-manager" id="task-details-file-manager">
+                <label>📎 Прикреплённые файлы</label>
+                <div class="file-list" id="task-details-files-list"></div>
+                <div class="upload-area" style="margin-top: 12px; display: flex; gap: 8px;">
+                    <input type="file" id="task-details-file-upload" accept="*/*" style="flex: 1;">
+                    <button type="button" class="btn-secondary" onclick="uploadTaskFileFromDetails()">📤 Загрузить</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // ========== ПОКАЗ РОДИТЕЛЬСКИХ ЗАДАЧ ==========
     var parentsHtml = '';
     var parentChain = task.parent_chain || [];
     var parentTasks = task.parent_tasks || {};
@@ -11125,38 +11464,51 @@ function renderTaskDetails(task) {
         logDebug('[TASK_DETAILS] Added parents HTML with ' + parentChain.length + ' parents');
     }
     
-    // Формируем HTML для файлов
-    var filesHtml = '';
+    // Формируем HTML для файлов (режим просмотра)
     var files = task.files || [];
+    var filesViewHtml = '<div class="task-details-files-title">📎 Прикреплённые файлы (' + files.length + ')</div>';
     if (files.length > 0) {
-        filesHtml = '<div class="task-details-files-title">📎 Прикреплённые файлы (' + files.length + ')</div>';
-        filesHtml += '<div class="task-details-files-list">';
+        filesViewHtml += '<div class="task-details-files-list" id="task-details-files-view-list">';
         for (var i = 0; i < files.length; i++) {
             var file = files[i];
             var fileIcon = getFileIconFromName(file.name);
             var safeName = escapeHtml(file.name).replace(/'/g, "\\'");
-            filesHtml += '<div class="task-details-file-item" onclick="showFilePreview(\'' + 
+            filesViewHtml += '<div class="task-details-file-item" onclick="showFilePreview(\'' + 
                 escapeHtml(file.uuid) + '\', \'' + safeName + '\', ' + (file.size_bytes || 0) + ', \'' + 
                 escapeHtml(file.mime || '') + '\')" title="' + safeName + '">';
-            filesHtml += fileIcon + ' ' + escapeHtml(file.name) + ' (' + (file.size || formatFileSize(file.size_bytes || 0)) + ')';
-            filesHtml += '</div>';
+            filesViewHtml += fileIcon + ' ' + escapeHtml(file.name) + ' (' + (file.size || formatFileSize(file.size_bytes || 0)) + ')';
+            filesViewHtml += '</div>';
         }
-        filesHtml += '</div>';
+        filesViewHtml += '</div>';
     } else {
-        filesHtml = '<div class="task-details-files-title">📎 Прикреплённые файлы</div>';
-        filesHtml += '<div class="task-details-description-empty">Нет прикреплённых файлов</div>';
+        filesViewHtml += '<div class="task-details-description-empty">Нет прикреплённых файлов</div>';
     }
     
     // Ссылка на задачу в projects.php
     var taskUrl = window.location.origin + (window.APP_BASE || '') + '/projects.php?task=' + task.uuid;
     
+    // Кнопки действий
+    var actionButtonsHtml = `
+        <div class="task-details-actions" id="task-details-view-actions">
+            <button class="task-details-btn-primary" id="task-details-edit-btn">✏️ Редактировать</button>
+            <a href="` + taskUrl + `" class="task-details-btn-secondary" target="_blank" rel="noopener noreferrer">📋 Перейти к задаче</a>
+        </div>
+        <div class="task-details-actions" id="task-details-edit-actions" style="display: none;">
+            <button class="task-details-btn-primary" id="task-details-save-btn">💾 Сохранить</button>
+            <button class="task-details-btn-secondary" id="task-details-cancel-btn">❌ Отмена</button>
+        </div>
+    `;
+    
+    // Собираем весь HTML для панели
     var html = '';
     
-    // ДОБАВЛЯЕМ БЛОК С РОДИТЕЛЯМИ (после статуса и исполнителя, перед описанием)
+    // Блок с родителями
     if (parentsHtml) {
         html += parentsHtml;
     }
     
+    // Блок статуса и исполнителя (режим просмотра)
+    html += '<div id="task-details-view-mode">';
     html += '<div class="task-details-field">';
     html += '<div class="task-details-field-label">📋 Статус</div>';
     html += '<div class="task-details-field-value ' + statusClass + '">' + statusText + '</div>';
@@ -11194,24 +11546,42 @@ function renderTaskDetails(task) {
     html += '</div>';
     
     html += '<div class="task-details-field">';
-    html += filesHtml;
+    html += filesViewHtml;
+    html += '</div>';
+    html += '</div>'; // закрываем view-mode
+    
+    // Режим редактирования (скрыт)
+    html += '<div id="task-details-edit-mode" style="display: none;">';
+    html += editFormHtml;
     html += '</div>';
     
-    html += '<div class="task-details-actions">';
-    html += '<a href="' + taskUrl + '" class="task-details-btn-primary" target="_blank" rel="noopener noreferrer">📋 Перейти к задаче</a>';
-    html += '<button class="task-details-btn-secondary" id="taskDetailsRefreshBtn">🔄 Обновить</button>';
-    html += '</div>';
+    // Кнопки действий
+    html += actionButtonsHtml;
     
     var bodyContainer = document.getElementById('taskDetailsBody');
     if (bodyContainer) {
         bodyContainer.innerHTML = html;
         
-        // Обработчик кнопки обновления
-        var refreshBtn = document.getElementById('taskDetailsRefreshBtn');
-        if (refreshBtn) {
-            refreshBtn.onclick = function() {
-                if (taskDetailsPanel.currentTaskUuid) {
-                    loadTaskDetails(taskDetailsPanel.currentTaskUuid);
+        // Рендерим список файлов в режиме редактирования
+        renderTaskDetailsFilesList(files);
+        
+        // Назначаем обработчики
+        var editBtn = document.getElementById('task-details-edit-btn');
+        if (editBtn) editBtn.onclick = function() { enterTaskEditMode(task); };
+        
+        var saveBtn = document.getElementById('task-details-save-btn');
+        if (saveBtn) saveBtn.onclick = function() { saveTaskDetails(task.uuid); };
+        
+        var cancelBtn = document.getElementById('task-details-cancel-btn');
+        if (cancelBtn) cancelBtn.onclick = function() { cancelTaskEditMode(task); };
+        
+        // Обработчик для загрузки файлов по Enter в поле выбора файла
+        var fileUploadInput = document.getElementById('task-details-file-upload');
+        if (fileUploadInput) {
+            fileUploadInput.onkeypress = function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    uploadTaskFileFromDetails();
                 }
             };
         }
@@ -11219,6 +11589,352 @@ function renderTaskDetails(task) {
     
     logDebug('[TASK_DETAILS] Rendering complete');
 }
+// ==================== BLOCK END: renderTaskDetails v2.3 ====================
+
+// Вспомогательная функция для рендеринга списка файлов в режиме редактирования
+function renderTaskDetailsFilesList(files) {
+    var container = document.getElementById('task-details-files-list');
+    if (!container) return;
+    
+    if (!files || files.length === 0) {
+        container.innerHTML = '<div class="task-details-description-empty" style="padding: 8px;">Нет прикреплённых файлов</div>';
+        return;
+    }
+    
+    var html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        var fileIcon = getFileIconFromName(file.name);
+        html += '<div class="task-details-file-item" style="display: flex; justify-content: space-between; align-items: center;">';
+        html += '<div style="display: flex; align-items: center; gap: 8px; cursor: pointer;" onclick="showFilePreview(\'' + 
+            escapeHtml(file.uuid) + '\', \'' + escapeHtml(file.name).replace(/'/g, "\\'") + '\', ' + (file.size_bytes || 0) + ', \'' + 
+            escapeHtml(file.mime || '') + '\')">';
+        html += fileIcon + ' ' + escapeHtml(file.name) + ' (' + (file.size || formatFileSize(file.size_bytes || 0)) + ')';
+        html += '</div>';
+        html += '<button class="btn-danger" style="padding: 4px 8px; font-size: 11px;" onclick="detachTaskFileFromDetails(\'' + escapeHtml(file.uuid) + '\')">🗑️</button>';
+        html += '</div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+}
+// ==================== BLOCK END: renderTaskDetails v2.0 ====================
+
+// ==================== BLOCK START: enterTaskEditMode v1.2 (with assignee) ====================
+// ver.1.0 - Базовая версия
+// ver.1.1 (2026-06-14) - ИСПРАВЛЕНА ОШИБКА: теперь правильно показывает форму редактирования
+// ver.1.2 (2026-06-14) - ДОБАВЛЕНА УСТАНОВКА ТЕКУЩЕГО ИСПОЛНИТЕЛЯ В SELECT
+
+function enterTaskEditMode(task) {
+    logDebug('[TASK_DETAILS_EDIT] Entering edit mode for task:', task.uuid);
+    
+    // Скрываем режим просмотра, показываем режим редактирования
+    var viewMode = document.getElementById('task-details-view-mode');
+    var editMode = document.getElementById('task-details-edit-mode');
+    var editForm = document.getElementById('task-details-edit-form');
+    var viewActions = document.getElementById('task-details-view-actions');
+    var editActions = document.getElementById('task-details-edit-actions');
+    
+    if (viewMode) viewMode.style.display = 'none';
+    if (editMode) editMode.style.display = 'block';
+    if (editForm) editForm.style.display = 'block';
+    if (viewActions) viewActions.style.display = 'none';
+    if (editActions) editActions.style.display = 'flex';
+    
+    // Заполняем поля формы текущими данными
+    var descrField = document.getElementById('task-details-descr');
+    var assigneeField = document.getElementById('task-details-assignee');
+    var timeStartField = document.getElementById('task-details-time-start');
+    var timeEndField = document.getElementById('task-details-time-end');
+    
+    if (descrField) descrField.value = task.descr || '';
+    if (assigneeField) assigneeField.value = task.assigned_to_uuid || '';
+    if (timeStartField) timeStartField.value = utcToLocalDatetimeString(task.time_start_utc);
+    if (timeEndField) timeEndField.value = utcToLocalDatetimeString(task.time_end_plan_utc);
+    
+    // Обновляем список файлов
+    var files = task.files || [];
+    if (typeof renderTaskDetailsFilesList === 'function') {
+        renderTaskDetailsFilesList(files);
+    }
+    
+    logDebug('[TASK_DETAILS_EDIT] Edit mode activated');
+}
+// ==================== BLOCK END: enterTaskEditMode v1.2 ====================
+
+function cancelTaskEditMode(originalTask) {
+    logDebug('[TASK_DETAILS_EDIT] Cancelling edit mode for task:', originalTask.uuid);
+    
+    // Переключаем обратно в режим просмотра
+    var viewMode = document.getElementById('task-details-view-mode');
+    var editMode = document.getElementById('task-details-edit-mode');
+    var viewActions = document.getElementById('task-details-view-actions');
+    var editActions = document.getElementById('task-details-edit-actions');
+    
+    if (viewMode) viewMode.style.display = 'block';
+    if (editMode) editMode.style.display = 'none';
+    if (viewActions) viewActions.style.display = 'flex';
+    if (editActions) editActions.style.display = 'none';
+    
+    // Восстанавливаем исходные данные в режиме просмотра (перерисовываем)
+    renderTaskDetails(originalTask);
+    
+    logDebug('[TASK_DETAILS_EDIT] Edit mode cancelled');
+}
+
+// ==================== BLOCK START: saveTaskDetails v1.3 (FIXED) ====================
+// ver.1.0 - Базовая версия
+// ver.1.1 (2026-06-14) - ИСПРАВЛЕНА ОШИБКА "Ошибка обработки ответа сервера"
+// ver.1.2 (2026-06-14) - ДОБАВЛЕНО ПОЛЕ "ИСПОЛНИТЕЛЬ" ПРИ СОХРАНЕНИИ
+// ver.1.3 (2026-06-14) - ИСПРАВЛЕНИЕ: БЕРЁМ ЧИСТЫЙ ЗАГОЛОВОК ИЗ currentTaskDetailsCleanTitle
+//                       - Удалено получение заголовка из DOM (который мог содержать счётчик [число])
+//                       - Добавлено логирование для отладки
+
+function saveTaskDetails(taskUuid) {
+    logDebug('[TASK_DETAILS_EDIT] Saving task details for:', taskUuid);
+    
+    if (!taskUuid) {
+        logError('[TASK_DETAILS_EDIT] No task UUID provided');
+        showAlert('Ошибка: задача не определена', 'error');
+        return;
+    }
+    
+    var newDescr = document.getElementById('task-details-descr') ? document.getElementById('task-details-descr').value : '';
+    var newAssigneeUuid = document.getElementById('task-details-assignee') ? document.getElementById('task-details-assignee').value : '';
+    var localStart = document.getElementById('task-details-time-start') ? document.getElementById('task-details-time-start').value : '';
+    var localEnd = document.getElementById('task-details-time-end') ? document.getElementById('task-details-time-end').value : '';
+    
+    // ========== ИСПРАВЛЕНИЕ v1.3: БЕРЁМ ЧИСТЫЙ ЗАГОЛОВОК ИЗ СОХРАНЁННОЙ ПЕРЕМЕННОЙ ==========
+    // Раньше заголовок брался из DOM (taskDetailsTitle), который мог содержать счётчик [число]
+    // Это приводило к сохранению счётчика обратно в БД и появлению "[9] [9]" в названии задачи
+    var taskTitle = window.currentTaskDetailsCleanTitle || '';
+    
+    if (!taskTitle && window.currentTaskDetailsData) {
+        taskTitle = window.currentTaskDetailsData.title || '';
+        logDebug('[TASK_DETAILS_EDIT] Got title from currentTaskDetailsData:', taskTitle);
+    }
+    
+    if (!taskTitle) {
+        // Fallback: пробуем извлечь из DOM, но ОБЯЗАТЕЛЬНО очищаем от счётчика
+        var titleHeader = document.getElementById('taskDetailsTitle');
+        if (titleHeader) {
+            taskTitle = titleHeader.innerText.replace(/^📋\s*/, '').replace(/\s*\[\d+\]\s*$/, '').trim();
+            logDebug('[TASK_DETAILS_EDIT] Got title from DOM (fallback, cleaned):', taskTitle);
+        }
+    }
+    
+    logDebug('[TASK_DETAILS_EDIT] Final clean task title:', taskTitle);
+    // ====================================================================================
+    
+    // Получаем project_uuid из сохранённой переменной или из данных задачи
+    var projectUuid = window.currentTaskDetailsProjectUuid;
+    if (!projectUuid && window.currentTaskDetailsData) {
+        projectUuid = window.currentTaskDetailsData.project_uuid;
+    }
+    
+    logDebug('[TASK_DETAILS_EDIT] Task title:', taskTitle);
+    logDebug('[TASK_DETAILS_EDIT] Project UUID:', projectUuid);
+    logDebug('[TASK_DETAILS_EDIT] Assignee UUID:', newAssigneeUuid);
+    
+    // Показываем индикатор загрузки на кнопке сохранения
+    var saveBtn = document.getElementById('task-details-save-btn');
+    var originalBtnText = saveBtn ? saveBtn.innerHTML : '💾 Сохранить';
+    if (saveBtn) {
+        saveBtn.innerHTML = '⏳ Сохранение...';
+        saveBtn.disabled = true;
+    }
+    
+    var formData = new URLSearchParams();
+    formData.append('action', 'edit_task');
+    formData.append('uuid', taskUuid);
+    formData.append('project_uuid', projectUuid || '');
+    formData.append('parent_task_uuid', '');
+    formData.append('title', taskTitle);
+    formData.append('descr', newDescr);
+    formData.append('assigned_to_uuid', newAssigneeUuid);
+    formData.append('time_start', localStart);
+    formData.append('time_end_plan', localEnd);
+    formData.append('ajax_mode', '1');
+    addCsrfToUrlParams(formData);
+    
+    logDebug('[TASK_DETAILS_EDIT] Sending request to:', window.APP_BASE + '/projects.php');
+    
+    fetch(window.APP_BASE + '/projects.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData
+    })
+    .then(function(response) {
+        logDebug('[TASK_DETAILS_EDIT] Response status:', response.status);
+        if (!response.ok) {
+            throw new Error('HTTP ' + response.status);
+        }
+        return response.json();
+    })
+    .then(function(data) {
+        logDebug('[TASK_DETAILS_EDIT] Response data:', data);
+        
+        if (saveBtn) {
+            saveBtn.innerHTML = originalBtnText;
+            saveBtn.disabled = false;
+        }
+        
+        if (data.success) {
+            logDebug('[TASK_DETAILS_EDIT] Task saved successfully');
+            showAlert('Задача обновлена', 'success');
+            
+            if (data.task) {
+                window.currentTaskDetailsData = data.task;
+                window.currentTaskDetailsProjectUuid = data.task.project_uuid;
+                // Обновляем сохранённый чистый заголовок из ответа сервера
+                window.currentTaskDetailsCleanTitle = data.task.title || taskTitle;
+                renderTaskDetails(data.task);
+            } else {
+                logDebug('[TASK_DETAILS_EDIT] No task data in response, reloading');
+                loadTaskDetails(taskUuid);
+            }
+            
+            var viewMode = document.getElementById('task-details-view-mode');
+            var editMode = document.getElementById('task-details-edit-mode');
+            var viewActions = document.getElementById('task-details-view-actions');
+            var editActions = document.getElementById('task-details-edit-actions');
+            if (viewMode) viewMode.style.display = 'block';
+            if (editMode) editMode.style.display = 'none';
+            if (viewActions) viewActions.style.display = 'flex';
+            if (editActions) editActions.style.display = 'none';
+            
+            if (typeof window.refreshTaskInList === 'function') {
+                window.refreshTaskInList(taskUuid);
+            }
+            
+            if (window.currentTaskUuid === taskUuid) {
+                var chatTitle = document.getElementById('chat-title');
+                if (chatTitle && taskTitle) {
+                    chatTitle.textContent = taskTitle;
+                }
+            }
+        } else {
+            logError('[TASK_DETAILS_EDIT] Save failed:', data.error);
+            showAlert('Ошибка сохранения: ' + (data.error || 'Неизвестная ошибка'), 'error');
+        }
+    })
+    .catch(function(err) {
+        logError('[TASK_DETAILS_EDIT] Network error:', err);
+        showAlert('Ошибка сети при сохранении', 'error');
+        if (saveBtn) {
+            saveBtn.innerHTML = originalBtnText;
+            saveBtn.disabled = false;
+        }
+    });
+}
+// ==================== BLOCK END: saveTaskDetails v1.3 ====================
+
+function uploadTaskFileFromDetails() {
+    var taskUuid = window.currentTaskDetailsUuid;
+    if (!taskUuid) {
+        showAlert('Ошибка: задача не определена', 'error');
+        return;
+    }
+    
+    var fileInput = document.getElementById('task-details-file-upload');
+    var file = fileInput ? fileInput.files[0] : null;
+    if (!file) {
+        showAlert('Выберите файл', 'warning');
+        return;
+    }
+    
+    logDebug('[TASK_DETAILS_EDIT] Uploading file to task:', taskUuid, file.name);
+    showAlert('⏳ Загрузка файла...', 'info');
+    
+    var formData = new FormData();
+    formData.append('action', 'upload_task_file');
+    formData.append('task_uuid', taskUuid);
+    formData.append('ajax_mode', '1');
+    formData.append('file', file);
+    addCsrfToFormData(formData);
+    
+    fetch(window.APP_BASE + '/projects.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success) {
+            logDebug('[TASK_DETAILS_EDIT] File uploaded successfully');
+            showAlert('✓ Файл загружен', 'success');
+            fileInput.value = '';
+            
+            // Обновляем задачу в панели
+            if (window.currentTaskDetailsUuid) {
+                loadTaskDetails(window.currentTaskDetailsUuid);
+            }
+            
+            // Обновляем задачу в DOM projects.php
+            if (typeof window.refreshTaskInList === 'function') {
+                window.refreshTaskInList(taskUuid);
+            }
+        } else {
+            logError('[TASK_DETAILS_EDIT] Upload failed:', data.error);
+            showAlert('Ошибка загрузки: ' + (data.error || 'Неизвестная ошибка'), 'error');
+        }
+    })
+    .catch(function(err) {
+        logError('[TASK_DETAILS_EDIT] Network error during upload:', err);
+        showAlert('Ошибка сети при загрузке файла', 'error');
+    });
+}
+
+function detachTaskFileFromDetails(fileUuid) {
+    var taskUuid = window.currentTaskDetailsUuid;
+    if (!taskUuid) {
+        showAlert('Ошибка: задача не определена', 'error');
+        return;
+    }
+    
+    if (!confirm('Удалить этот файл из задачи? Он будет полностью удалён с сервера.')) {
+        return;
+    }
+    
+    logDebug('[TASK_DETAILS_EDIT] Detaching file:', fileUuid, 'from task:', taskUuid);
+    showAlert('🗑️ Удаление файла...', 'info');
+    
+    var formData = new URLSearchParams();
+    formData.append('action', 'detach_file_from_task');
+    formData.append('task_uuid', taskUuid);
+    formData.append('file_uuid', fileUuid);
+    formData.append('ajax_mode', '1');
+    addCsrfToUrlParams(formData);
+    
+    fetch(window.APP_BASE + '/projects.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success) {
+            logDebug('[TASK_DETAILS_EDIT] File detached successfully');
+            showAlert('✓ Файл удалён', 'success');
+            
+            // Обновляем задачу в панели
+            if (window.currentTaskDetailsUuid) {
+                loadTaskDetails(window.currentTaskDetailsUuid);
+            }
+            
+            // Обновляем задачу в DOM projects.php
+            if (typeof window.refreshTaskInList === 'function') {
+                window.refreshTaskInList(taskUuid);
+            }
+        } else {
+            logError('[TASK_DETAILS_EDIT] Detach failed:', data.error);
+            showAlert('Ошибка удаления: ' + (data.error || 'Неизвестная ошибка'), 'error');
+        }
+    })
+    .catch(function(err) {
+        logError('[TASK_DETAILS_EDIT] Network error during detach:', err);
+        showAlert('Ошибка сети при удалении файла', 'error');
+    });
+}
+// ==================== BLOCK END: Task details edit functions v1.0 ====================
 
 // Вспомогательная функция для получения иконки файла
 function getFileIconFromName(filename) {
@@ -11233,7 +11949,14 @@ function getFileIconFromName(filename) {
     return icons[ext] || '📎';
 }
 
-// Функция открытия панели деталей задачи
+// ==================== BLOCK START: openTaskDetailsPanel v1.3 (FIXED) ====================
+// ver.1.0 - Базовая версия
+// ver.1.1 (2026-06-14) - ДОБАВЛЕНО СОХРАНЕНИЕ project_uuid
+// ver.1.2 (2026-06-14) - ИСПРАВЛЕНА ИНИЦИАЛИЗАЦИЯ project_uuid
+// ver.1.3 (2026-06-14) - ИСПРАВЛЕНИЕ: ОЧИСТКА ЗАГОЛОВКА ОТ СЧЁТЧИКА СООБЩЕНИЙ [число]
+//                       - Добавлено сохранение чистого заголовка в window.currentTaskDetailsCleanTitle
+//                       - Добавлено логирование для отладки
+
 function openTaskDetailsPanel(taskUuid, taskTitle) {
     logDebug('[TASK_DETAILS] Opening panel for task:', taskUuid, 'title:', taskTitle);
     
@@ -11251,10 +11974,28 @@ function openTaskDetailsPanel(taskUuid, taskTitle) {
         return;
     }
     
-    // Обновляем заголовок
+    // ОЧИЩАЕМ заголовок от счётчика сообщений [число] в конце
+    // Это предотвращает сохранение счётчика обратно в БД при редактировании
+    var cleanTitle = taskTitle || 'Информация о задаче';
+    cleanTitle = cleanTitle.replace(/\s*\[\d+\]\s*$/, '').trim();
+    
+    logDebug('[TASK_DETAILS] Cleaned title: "' + cleanTitle + '" (original: "' + taskTitle + '")');
+    
+    // Обновляем заголовок в панели (чистый, без счётчика)
     if (titleElement) {
-        titleElement.innerHTML = '📋 ' + (taskTitle || 'Информация о задаче');
+        titleElement.innerHTML = '📋 ' + cleanTitle;
     }
+    
+    // Сохраняем UUID текущей задачи в глобальную переменную
+    window.currentTaskDetailsUuid = taskUuid;
+    window.currentTaskDetailsData = null;
+    window.currentTaskDetailsProjectUuid = null;
+    
+    // Сохраняем ЧИСТЫЙ заголовок для последующего использования в saveTaskDetails
+    // Это критично: при сохранении задачи не должен использоваться заголовок со счётчиком
+    window.currentTaskDetailsCleanTitle = cleanTitle;
+    
+    logDebug('[TASK_DETAILS] Saved clean title to window.currentTaskDetailsCleanTitle:', cleanTitle);
     
     // Загружаем данные
     loadTaskDetails(taskUuid);
@@ -11269,6 +12010,7 @@ function openTaskDetailsPanel(taskUuid, taskTitle) {
         document.body.style.overflow = 'hidden';
     }
 }
+// ==================== BLOCK END: openTaskDetailsPanel v1.3 ====================
 
 // Функция закрытия панели деталей задачи
 function closeTaskDetailsPanel() {
@@ -11288,7 +12030,12 @@ function closeTaskDetailsPanel() {
     }
 }
 
-// Обработчик клика на заголовок задачи
+// ==================== BLOCK START: setupTaskTitleClickHandler v1.3 (FIXED) ====================
+// ver.1.0 - Базовая версия
+// ver.1.1 (2026-06-14) - ДОБАВЛЕНА ПРОВЕРКА НА СУЩЕСТВОВАНИЕ chat-title
+// ver.1.3 (2026-06-14) - ИСПРАВЛЕНИЕ: ПЕРЕДАЁМ ЧИСТЫЙ ЗАГОЛОВОК (БЕЗ СЧЁТЧИКА) В openTaskDetailsPanel
+//                       - Заголовок очищается от [число] перед передачей
+
 function setupTaskTitleClickHandler() {
     var chatTitle = document.getElementById('chat-title');
     if (!chatTitle) {
@@ -11299,35 +12046,38 @@ function setupTaskTitleClickHandler() {
     
     logDebug('[TASK_DETAILS] Setting up click handler for chat-title');
     
-    // Сохраняем оригинальный href для использования в кнопке "Перейти к задаче"
-    var originalHref = chatTitle.getAttribute('href');
-    
-    // Заменяем поведение клика
     chatTitle.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopPropagation();
         
         var taskUuid = window.currentTaskUuid;
-        var taskTitle = this.textContent || 'Задача';
+        var rawTaskTitle = this.textContent || 'Задача';
         
-        logDebug('[TASK_DETAILS] Chat title clicked, taskUuid:', taskUuid);
+        logDebug('[TASK_DETAILS] Chat title clicked, raw title from DOM:', rawTaskTitle);
+        
+        // ОЧИЩАЕМ заголовок от счётчика сообщений [число] в конце
+        // Это предотвращает передачу грязного заголовка в openTaskDetailsPanel
+        var cleanTaskTitle = rawTaskTitle.replace(/\s*\[\d+\]\s*$/, '').trim();
+        
+        logDebug('[TASK_DETAILS] Cleaned title for panel:', cleanTaskTitle);
         
         if (taskUuid) {
-            openTaskDetailsPanel(taskUuid, taskTitle);
+            openTaskDetailsPanel(taskUuid, cleanTaskTitle);
         } else {
             logDebug('[TASK_DETAILS] No currentTaskUuid, falling back to navigation');
+            var originalHref = this.getAttribute('href');
             if (originalHref && originalHref !== '#') {
                 window.location.href = originalHref;
             }
         }
     });
     
-    // Меняем стиль курсора для индикации интерактивности
     chatTitle.style.cursor = 'pointer';
     chatTitle.style.borderBottom = '1px dashed #70a0ff';
     
     logDebug('[TASK_DETAILS] Click handler attached to chat-title');
 }
+// ==================== BLOCK END: setupTaskTitleClickHandler v1.3 ====================
 
 // Обработчик закрытия панели
 function setupTaskDetailsCloseHandler() {
@@ -11354,7 +12104,10 @@ function setupTaskDetailsCloseHandler() {
     });
 }
 
-// Инициализация панели деталей задачи
+// ==================== BLOCK START: initTaskDetailsPanel v1.1 ====================
+// ver.1.0 - Базовая версия
+// ver.1.1 (2026-06-14) - ДОБАВЛЕНА ПРОВЕРКА НА СУЩЕСТВОВАНИЕ chat-title
+
 function initTaskDetailsPanel() {
     logDebug('[TASK_DETAILS] Initializing panel');
     
@@ -11363,6 +12116,66 @@ function initTaskDetailsPanel() {
     
     logDebug('[TASK_DETAILS] Initialization complete');
 }
+
+function setupTaskTitleClickHandler() {
+    var chatTitle = document.getElementById('chat-title');
+    if (!chatTitle) {
+        logDebug('[TASK_DETAILS] chat-title element not found, will retry');
+        setTimeout(setupTaskTitleClickHandler, 500);
+        return;
+    }
+    
+    logDebug('[TASK_DETAILS] Setting up click handler for chat-title');
+    
+    chatTitle.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        var taskUuid = window.currentTaskUuid;
+        var taskTitle = this.textContent || 'Задача';
+        
+        logDebug('[TASK_DETAILS] Chat title clicked, taskUuid:', taskUuid);
+        
+        if (taskUuid) {
+            openTaskDetailsPanel(taskUuid, taskTitle);
+        } else {
+            logDebug('[TASK_DETAILS] No currentTaskUuid, falling back to navigation');
+            var originalHref = this.getAttribute('href');
+            if (originalHref && originalHref !== '#') {
+                window.location.href = originalHref;
+            }
+        }
+    });
+    
+    chatTitle.style.cursor = 'pointer';
+    chatTitle.style.borderBottom = '1px dashed #70a0ff';
+    
+    logDebug('[TASK_DETAILS] Click handler attached to chat-title');
+}
+
+function setupTaskDetailsCloseHandler() {
+    var closeBtn = document.getElementById('taskDetailsCloseBtn');
+    var overlay = document.getElementById('taskDetailsOverlay');
+    
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            closeTaskDetailsPanel();
+        });
+    }
+    
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            closeTaskDetailsPanel();
+        });
+    }
+    
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && taskDetailsPanel.isOpen) {
+            closeTaskDetailsPanel();
+        }
+    });
+}
+// ==================== BLOCK END: initTaskDetailsPanel v1.1 ====================
 
 // Запускаем инициализацию после загрузки DOM
 if (document.readyState === 'loading') {
