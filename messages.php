@@ -3919,6 +3919,18 @@ body > .mobile-drawer-toggle {
 
 /* ==================== BLOCK END: Task details edit form styles v1.0 ==================== */
 
+
+/* ==================== FIX: Отступ заголовка панели от кнопки-гамбургера ==================== */
+@media (max-width: 768px) {
+    #taskDetailsPanel .task-details-header {
+        padding-left: 70px !important;
+    }
+    #taskDetailsPanel .task-details-header h3 {
+        margin-left: 0 !important;
+        font-size: 15px !important;
+    }
+}
+
 </style>
 </head>
 <body>
@@ -10825,8 +10837,8 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
     }
 }
 
-/* ==================== BLOCK START: Task details panel styles v1.0 ==================== */
-/* ver.1.0 (2026-06-11) - Стили для немодальной панели деталей задачи */
+/* ==================== BLOCK START: Task details panel styles v1.9 (FIXED MOBILE SPACING) ==================== */
+/* ver.1.9 (2026-06-15) - ПРАВИЛЬНЫЙ ОТСТУП ДЛЯ ФАЙЛОВ ПОД КНОПКАМИ */
 
 .task-details-panel {
     position: fixed;
@@ -10850,20 +10862,84 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
     transform: translateX(0);
 }
 
-/* На мобильных устройствах панель поверх чата */
+/* Мобильные стили - ПЕРЕОПРЕДЕЛЯЕМ */
 @media (max-width: 768px) {
     .task-details-panel {
         width: 100%;
         max-width: 100%;
+        height: 100dvh;
         z-index: 2100;
-        transform: translateX(-100%);
     }
     
-    .task-details-panel.open {
-        transform: translateX(0);
+    /* Отступ заголовка от гамбургера */
+    .task-details-header {
+        padding-left: 70px !important;
+        padding-right: 16px !important;
+    }
+    
+    /* Тело с прокруткой - отступ снизу будет добавлен через JS */
+    .task-details-body {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 16px;
+        min-height: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+        scroll-behavior: smooth;
+    }
+    
+    /* Базовые стили для кнопок (JS добавит фиксацию) */
+    .task-details-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        background: #1a1a2e;
+        border-top: 1px solid rgba(79, 124, 255, 0.3);
+        padding: 12px 16px;
+        margin-top: 20px;
+    }
+    
+    /* Кнопки внутри контейнера */
+    .task-details-actions .task-details-btn-primary,
+    .task-details-actions .task-details-btn-secondary {
+        flex: 1;
+        justify-content: center;
+        padding: 12px 16px;
+        font-size: 14px;
+        text-align: center;
     }
 }
 
+/* Десктопные стили - sticky поведение */
+@media (min-width: 769px) {
+    .task-details-body {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 20px;
+        min-height: 0;
+        max-width: 100%;
+        box-sizing: border-box;
+        scroll-behavior: smooth;
+    }
+    
+    .task-details-actions {
+        margin-top: auto;
+        padding-top: 20px;
+        padding-bottom: 20px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+        background: #1a1a2e;
+        position: sticky;
+        bottom: 0;
+    }
+}
+
+/* Общие стили (для всех) */
 .task-details-overlay {
     position: fixed;
     top: 0;
@@ -10923,10 +10999,28 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
     color: #f87171;
 }
 
-.task-details-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px;
+/* Внутренний контейнер для контента */
+.task-details-content {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Длинные слова и ссылки - переносим */
+.task-details-field-value,
+.task-details-description,
+.task-details-description-empty {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    white-space: normal;
+    max-width: 100%;
+}
+
+.task-details-field-value .external-link {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: break-word;
+    word-break: break-all;
 }
 
 .task-details-field {
@@ -10945,7 +11039,6 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
 .task-details-field-value {
     font-size: 14px;
     color: #e9eefc;
-    word-break: break-word;
     white-space: pre-wrap;
     line-height: 1.5;
 }
@@ -11000,15 +11093,6 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
     transform: scale(1.02);
 }
 
-.task-details-actions {
-    display: flex;
-    gap: 12px;
-    margin-top: 24px;
-    padding-top: 20px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    flex-wrap: wrap;
-}
-
 .task-details-btn-primary {
     background: #4f7cff;
     border: none;
@@ -11042,6 +11126,7 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    text-decoration: none;
 }
 
 .task-details-btn-secondary:hover {
@@ -11060,7 +11145,6 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
     color: #f87171;
 }
 
-/* Для ссылок внутри описания */
 .task-details-field-value .external-link {
     display: inline-block;
     background: rgba(79, 124, 255, 0.15);
@@ -11071,15 +11155,80 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
     margin: 2px;
     border-left: 2px solid #f59e0b;
     color: #f59e0b;
-    word-break: break-all;
 }
 
-.task-details-field-value .external-link:hover {
-    background: rgba(79, 124, 255, 0.3);
-    text-decoration: none;
+/* Форма редактирования */
+.task-details-textarea,
+.task-details-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: #0b1020;
+    color: #e9eefc;
+    font-size: 14px;
+    font-family: inherit;
+    box-sizing: border-box;
 }
 
-/* ==================== BLOCK END: Task details panel styles v1.0 ==================== */
+.task-details-textarea:focus,
+.task-details-input:focus {
+    outline: none;
+    border-color: #4f7cff;
+}
+
+#task-details-file-manager {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#task-details-file-manager label {
+    display: block;
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #9bb7ff;
+}
+
+#task-details-files-list {
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+#task-details-file-manager .upload-area {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+#task-details-file-manager .upload-area input[type="file"] {
+    flex: 1;
+    background: #0b1020;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #e9eefc;
+    font-size: 13px;
+}
+
+.btn-danger {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 6px;
+    color: #f87171;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-danger:hover {
+    background: rgba(239, 68, 68, 0.3);
+}
+
+/* ==================== BLOCK END: Task details panel styles v1.9 ==================== */
+
 </style>
 
 
@@ -11372,12 +11521,11 @@ function parseTaskDetailsLinks(text) {
 // ==================== BLOCK END: Helper functions for task details panel v1.0 ====================
 
 
-// ==================== BLOCK START: renderTaskDetails v2.3 (with assignee field) ====================
-// ver.2.2 - Базовая версия с формой редактирования
-// ver.2.3 (2026-06-14) - ДОБАВЛЕНО ПОЛЕ "ИСПОЛНИТЕЛЬ" В ФОРМУ РЕДАКТИРОВАНИЯ
+// ==================== BLOCK START: renderTaskDetails v2.5 (with sticky actions) ====================
+// ver.2.5 (2026-06-15) - ФИКСАЦИЯ КНОПОК ВНИЗУ
 
 function renderTaskDetails(task) {
-    logDebug('[TASK_DETAILS] v2.3 Rendering task details for:', task.uuid);
+    logDebug('[TASK_DETAILS] v2.5 Rendering task details for:', task.uuid);
     
     var statusText = (task.status === 1) ? '✅ Выполнена' : '🟢 Активна';
     var statusClass = (task.status === 1) ? 'completed' : '';
@@ -11487,7 +11635,7 @@ function renderTaskDetails(task) {
     // Ссылка на задачу в projects.php
     var taskUrl = window.location.origin + (window.APP_BASE || '') + '/projects.php?task=' + task.uuid;
     
-    // Кнопки действий
+    // Кнопки действий (ОБЕРНУТЫ В .task-details-actions-container для правильного sticky)
     var actionButtonsHtml = `
         <div class="task-details-actions" id="task-details-view-actions">
             <button class="task-details-btn-primary" id="task-details-edit-btn">✏️ Редактировать</button>
@@ -11499,8 +11647,9 @@ function renderTaskDetails(task) {
         </div>
     `;
     
-    // Собираем весь HTML для панели
-    var html = '';
+    // ========== СОБИРАЕМ ВЕСЬ HTML ДЛЯ ПАНЕЛИ ==========
+    // ОБОРАЧИВАЕМ В .task-details-content ДЛЯ ПРАВИЛЬНОЙ ПРОКРУТКИ
+    var html = '<div class="task-details-content">';
     
     // Блок с родителями
     if (parentsHtml) {
@@ -11555,8 +11704,10 @@ function renderTaskDetails(task) {
     html += editFormHtml;
     html += '</div>';
     
-    // Кнопки действий
+    // Кнопки действий (ДОБАВЛЯЕМ ПОСЛЕ ВСЕГО КОНТЕНТА, ЧТОБЫ ОНИ БЫЛИ ВНИЗУ)
     html += actionButtonsHtml;
+    
+    html += '</div>'; // закрываем task-details-content
     
     var bodyContainer = document.getElementById('taskDetailsBody');
     if (bodyContainer) {
@@ -11587,9 +11738,20 @@ function renderTaskDetails(task) {
         }
     }
     
+    // Применяем отступ заголовка на мобильных после рендеринга
+    if (window.innerWidth <= 768) {
+        setTimeout(function() {
+            var header = document.querySelector('.task-details-header');
+            if (header && parseInt(window.getComputedStyle(header).paddingLeft) < 60) {
+                header.style.paddingLeft = '70px';
+                logDebug('[TASK_DETAILS] Applied safe padding to header after render');
+            }
+        }, 50);
+    }
+    
     logDebug('[TASK_DETAILS] Rendering complete');
 }
-// ==================== BLOCK END: renderTaskDetails v2.3 ====================
+// ==================== BLOCK END: renderTaskDetails v2.5 ====================
 
 // Вспомогательная функция для рендеринга списка файлов в режиме редактирования
 function renderTaskDetailsFilesList(files) {
@@ -11619,10 +11781,8 @@ function renderTaskDetailsFilesList(files) {
 }
 // ==================== BLOCK END: renderTaskDetails v2.0 ====================
 
-// ==================== BLOCK START: enterTaskEditMode v1.2 (with assignee) ====================
-// ver.1.0 - Базовая версия
-// ver.1.1 (2026-06-14) - ИСПРАВЛЕНА ОШИБКА: теперь правильно показывает форму редактирования
-// ver.1.2 (2026-06-14) - ДОБАВЛЕНА УСТАНОВКА ТЕКУЩЕГО ИСПОЛНИТЕЛЯ В SELECT
+// ==================== BLOCK START: enterTaskEditMode v1.3 (with content wrapper) ====================
+// ver.1.3 (2026-06-15) - СОХРАНЕНИЕ КОНТЕЙНЕРА .task-details-content ПРИ ПЕРЕКЛЮЧЕНИИ
 
 function enterTaskEditMode(task) {
     logDebug('[TASK_DETAILS_EDIT] Entering edit mode for task:', task.uuid);
@@ -11659,8 +11819,9 @@ function enterTaskEditMode(task) {
     
     logDebug('[TASK_DETAILS_EDIT] Edit mode activated');
 }
-// ==================== BLOCK END: enterTaskEditMode v1.2 ====================
+// ==================== BLOCK END: enterTaskEditMode v1.3 ====================
 
+// ==================== BLOCK START: cancelTaskEditMode v1.1 ====================
 function cancelTaskEditMode(originalTask) {
     logDebug('[TASK_DETAILS_EDIT] Cancelling edit mode for task:', originalTask.uuid);
     
@@ -11680,6 +11841,7 @@ function cancelTaskEditMode(originalTask) {
     
     logDebug('[TASK_DETAILS_EDIT] Edit mode cancelled');
 }
+// ==================== BLOCK END: cancelTaskEditMode v1.1 ====================
 
 // ==================== BLOCK START: saveTaskDetails v1.3 (FIXED) ====================
 // ver.1.0 - Базовая версия
@@ -11949,13 +12111,8 @@ function getFileIconFromName(filename) {
     return icons[ext] || '📎';
 }
 
-// ==================== BLOCK START: openTaskDetailsPanel v1.3 (FIXED) ====================
-// ver.1.0 - Базовая версия
-// ver.1.1 (2026-06-14) - ДОБАВЛЕНО СОХРАНЕНИЕ project_uuid
-// ver.1.2 (2026-06-14) - ИСПРАВЛЕНА ИНИЦИАЛИЗАЦИЯ project_uuid
-// ver.1.3 (2026-06-14) - ИСПРАВЛЕНИЕ: ОЧИСТКА ЗАГОЛОВКА ОТ СЧЁТЧИКА СООБЩЕНИЙ [число]
-//                       - Добавлено сохранение чистого заголовка в window.currentTaskDetailsCleanTitle
-//                       - Добавлено логирование для отладки
+// ==================== BLOCK START: openTaskDetailsPanel v1.5 (FIXED MOBILE) ====================
+// ver.1.5 (2026-06-15) - ФИКСАЦИЯ КНОПОК И ОТСТУП ДЛЯ ФАЙЛОВ НА МОБИЛЬНЫХ
 
 function openTaskDetailsPanel(taskUuid, taskTitle) {
     logDebug('[TASK_DETAILS] Opening panel for task:', taskUuid, 'title:', taskTitle);
@@ -11975,32 +12132,22 @@ function openTaskDetailsPanel(taskUuid, taskTitle) {
     }
     
     // ОЧИЩАЕМ заголовок от счётчика сообщений [число] в конце
-    // Это предотвращает сохранение счётчика обратно в БД при редактировании
     var cleanTitle = taskTitle || 'Информация о задаче';
     cleanTitle = cleanTitle.replace(/\s*\[\d+\]\s*$/, '').trim();
     
     logDebug('[TASK_DETAILS] Cleaned title: "' + cleanTitle + '" (original: "' + taskTitle + '")');
     
-    // Обновляем заголовок в панели (чистый, без счётчика)
     if (titleElement) {
         titleElement.innerHTML = '📋 ' + cleanTitle;
     }
     
-    // Сохраняем UUID текущей задачи в глобальную переменную
     window.currentTaskDetailsUuid = taskUuid;
     window.currentTaskDetailsData = null;
     window.currentTaskDetailsProjectUuid = null;
-    
-    // Сохраняем ЧИСТЫЙ заголовок для последующего использования в saveTaskDetails
-    // Это критично: при сохранении задачи не должен использоваться заголовок со счётчиком
     window.currentTaskDetailsCleanTitle = cleanTitle;
     
-    logDebug('[TASK_DETAILS] Saved clean title to window.currentTaskDetailsCleanTitle:', cleanTitle);
-    
-    // Загружаем данные
     loadTaskDetails(taskUuid);
     
-    // Открываем панель
     panel.classList.add('open');
     overlay.classList.add('open');
     taskDetailsPanel.isOpen = true;
@@ -12008,11 +12155,98 @@ function openTaskDetailsPanel(taskUuid, taskTitle) {
     // Блокируем скролл body на мобильных
     if (window.innerWidth <= 768) {
         document.body.style.overflow = 'hidden';
+        
+        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: если заголовок перекрыт гамбургером, добавляем отступ
+        setTimeout(function() {
+            var header = document.querySelector('.task-details-header');
+            if (header) {
+                var currentPaddingLeft = window.getComputedStyle(header).paddingLeft;
+                logDebug('[TASK_DETAILS] Header padding-left:', currentPaddingLeft);
+                if (parseInt(currentPaddingLeft) < 60) {
+                    header.style.paddingLeft = '70px';
+                    logDebug('[TASK_DETAILS] Applied padding-left to header');
+                }
+            }
+        }, 50);
+        
+        // v1.5: ПРИМЕНЯЕМ ФИКСАЦИЮ КНОПОК НА МОБИЛЬНЫХ
+        setTimeout(function() {
+            fixMobileTaskButtonsPosition();
+        }, 100);
+        setTimeout(function() {
+            fixMobileTaskButtonsPosition();
+        }, 500);
+        setTimeout(function() {
+            fixMobileTaskButtonsPosition();
+        }, 1000);
     }
 }
-// ==================== BLOCK END: openTaskDetailsPanel v1.3 ====================
 
-// Функция закрытия панели деталей задачи
+// Глобальная функция для фиксации кнопок на мобильных
+window.fixMobileTaskButtonsPosition = function() {
+    // Только на мобильных
+    if (window.innerWidth > 768) return;
+    
+    var panel = document.getElementById('taskDetailsPanel');
+    if (!panel || !panel.classList.contains('open')) return;
+    
+    var actions = document.querySelector('.task-details-actions');
+    var body = document.querySelector('.task-details-body');
+    
+    if (!actions) return;
+    
+    // Получаем безопасную зону снизу (для iPhone с физической кнопкой)
+    var safeAreaBottom = 0;
+    try {
+        var testDiv = document.createElement('div');
+        testDiv.style.position = 'fixed';
+        testDiv.style.bottom = 'env(safe-area-inset-bottom)';
+        testDiv.style.visibility = 'hidden';
+        document.body.appendChild(testDiv);
+        var safeBottomValue = getComputedStyle(testDiv).bottom;
+        if (safeBottomValue && safeBottomValue !== '0px') {
+            safeAreaBottom = parseInt(safeBottomValue) || 0;
+        }
+        testDiv.remove();
+    } catch(e) {}
+    
+    if (safeAreaBottom === 0 && window.innerHeight > window.screen.height - 20) {
+        safeAreaBottom = 34;
+    }
+    
+    // Вычисляем высоту кнопок
+    var actionsHeight = actions.offsetHeight;
+    
+    // Принудительно применяем стили к кнопкам
+    actions.style.position = 'fixed';
+    actions.style.bottom = safeAreaBottom + 'px';
+    actions.style.left = '0';
+    actions.style.right = '0';
+    actions.style.width = '100%';
+    actions.style.zIndex = '100000';
+    actions.style.background = '#1a1a2e';
+    actions.style.padding = '12px 16px';
+    actions.style.paddingBottom = (12 + safeAreaBottom) + 'px';
+    actions.style.margin = '0';
+    actions.style.borderTop = '2px solid #4f7cff';
+    actions.style.boxShadow = '0 -4px 15px rgba(0,0,0,0.3)';
+    actions.style.borderRadius = '0';
+    
+    // КЛЮЧЕВОЕ: добавляем большой отступ телу, чтобы последние файлы не перекрывались кнопками
+    if (body) {
+        body.style.paddingBottom = (actionsHeight + safeAreaBottom + 20) + 'px';
+        body.style.marginBottom = '0';
+        logDebug('[MOBILE_FIX] Body padding-bottom set to:', body.style.paddingBottom);
+    }
+    
+    logDebug('[MOBILE_FIX] Buttons fixed at bottom, safe-area:', safeAreaBottom, 'actionsHeight:', actionsHeight);
+};
+// ==================== BLOCK END: openTaskDetailsPanel v1.5 ====================
+
+
+// ==================== BLOCK START: closeTaskDetailsPanel v1.1 ====================
+// ver.1.1 (2026-06-15) - ВОССТАНОВЛЕНИЕ СТИЛЕЙ ПРИ ЗАКРЫТИИ
+
 function closeTaskDetailsPanel() {
     logDebug('[TASK_DETAILS] Closing panel');
     
@@ -12024,11 +12258,38 @@ function closeTaskDetailsPanel() {
     
     taskDetailsPanel.isOpen = false;
     
-    // Восстанавливаем скролл body на мобильных
+    // Восстанавливаем скролл body на мобильных И сбрасываем inline-стили
     if (window.innerWidth <= 768) {
         document.body.style.overflow = '';
+        
+        // Сбрасываем inline-стили, которые были применены при открытии
+        var actions = document.querySelector('.task-details-actions');
+        var body = document.querySelector('.task-details-body');
+        
+        if (actions) {
+            actions.style.position = '';
+            actions.style.bottom = '';
+            actions.style.left = '';
+            actions.style.right = '';
+            actions.style.width = '';
+            actions.style.zIndex = '';
+            actions.style.background = '';
+            actions.style.padding = '';
+            actions.style.margin = '';
+            actions.style.borderTop = '';
+            actions.style.boxShadow = '';
+            actions.style.borderRadius = '';
+        }
+        
+        if (body) {
+            body.style.paddingBottom = '';
+            body.style.marginBottom = '';
+        }
     }
 }
+// ==================== BLOCK END: closeTaskDetailsPanel v1.1 ====================
+
+
 
 // ==================== BLOCK START: setupTaskTitleClickHandler v1.3 (FIXED) ====================
 // ver.1.0 - Базовая версия
@@ -12104,9 +12365,8 @@ function setupTaskDetailsCloseHandler() {
     });
 }
 
-// ==================== BLOCK START: initTaskDetailsPanel v1.1 ====================
-// ver.1.0 - Базовая версия
-// ver.1.1 (2026-06-14) - ДОБАВЛЕНА ПРОВЕРКА НА СУЩЕСТВОВАНИЕ chat-title
+// ==================== BLOCK START: initTaskDetailsPanel v1.2 ====================
+// ver.1.2 (2026-06-15) - ДОБАВЛЕНА ПРОВЕРКА ОТСТУПА ЗАГОЛОВКА
 
 function initTaskDetailsPanel() {
     logDebug('[TASK_DETAILS] Initializing panel');
@@ -12114,8 +12374,21 @@ function initTaskDetailsPanel() {
     setupTaskTitleClickHandler();
     setupTaskDetailsCloseHandler();
     
+    // Дополнительная проверка отступа заголовка на мобильных
+    //if (window.innerWidth <= 768) {
+        var header = document.querySelector('.task-details-header');
+        if (header) {
+            var computedPadding = window.getComputedStyle(header).paddingLeft;
+            if (parseInt(computedPadding) < 60) {
+                header.style.paddingLeft = '70px';
+                logDebug('[TASK_DETAILS] Applied safe padding to header on init');
+            }
+        }
+    //}
+    
     logDebug('[TASK_DETAILS] Initialization complete');
 }
+// ==================== BLOCK END: initTaskDetailsPanel v1.2 ====================
 
 function setupTaskTitleClickHandler() {
     var chatTitle = document.getElementById('chat-title');
