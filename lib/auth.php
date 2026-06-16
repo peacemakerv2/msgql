@@ -1653,3 +1653,101 @@ function msgql_log_password_change(string $user_uuid, string $changed_by_uuid, m
     return $result;
 }
 // ==================== BLOCK END: Force password change functions v2.0 ====================
+
+
+// ==================== BLOCK START: get_projects_with_notification_counts v1.0 ====================
+// ver.1.0 (2026-06-16) - ДОБАВЛЕНА ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПРОЕКТОВ С КОЛИЧЕСТВОМ НЕПРОЧИТАННЫХ УВЕДОМЛЕНИЙ
+// - Возвращает проекты с добавленным полем unread_notifications_count
+// - Используется для отображения красного бейджа на карточках проектов
+
+function get_projects_with_notification_counts(string $user_uuid): array {
+    $db = msgql_db();
+    
+    // Получаем все доступные проекты
+    if (msgql_is_admin()) {
+        $sql = "SELECT p.*, u.name as creator_name, u.login as creator_login,
+                       (SELECT COUNT(*) FROM tasks WHERE project_uuid = p.uuid) as tasks_count
+                FROM projects p 
+                LEFT JOIN users u ON p.created_by_uuid = u.uuid 
+                ORDER BY p.time DESC";
+        $result = $db->query($sql);
+        $projects = $result->fetch_all(MYSQLI_ASSOC);
+    } else {
+        $sql = "SELECT DISTINCT p.*, u.name as creator_name, u.login as creator_login,
+                       (SELECT COUNT(*) FROM tasks WHERE project_uuid = p.uuid) as tasks_count
+                FROM projects p
+                LEFT JOIN users u ON p.created_by_uuid = u.uuid
+                LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ?
+                WHERE p.created_by_uuid = ? OR (upp.can_view = 1)
+                ORDER BY p.time DESC";
+        $stmt = $db->prepare($sql);
+        $stmt->bind_param("ss", $user_uuid, $user_uuid);
+        $stmt->execute();
+        $projects = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+    }
+    
+    if (empty($projects)) {
+        return $projects;
+    }
+    
+    // Собираем все UUID проектов
+    $project_uuids = array_column($projects, 'uuid');
+    $placeholders = implode(',', array_fill(0, count($project_uuids), '?'));
+    
+    // Проверяем существование таблицы user_notifications
+    $table_check = $db->query("SHOW TABLES LIKE 'user_notifications'");
+    $table_exists = $table_check->num_rows > 0;
+    
+    if (!$table_exists) {
+        log_debug("[PROJECT_BADGES] user_notifications table not found, returning projects without badges");
+        foreach ($projects as &$p) {
+            $p['unread_notifications_count'] = 0;
+        }
+        return $projects;
+    }
+    
+    // Получаем количество непрочитанных уведомлений по каждому проекту
+    $badge_sql = "
+        SELECT 
+            t.project_uuid,
+            COUNT(DISTINCT n.id) as unread_count
+        FROM user_notifications n
+        JOIN tasks t ON n.task_uuid = t.uuid
+        WHERE n.user_uuid = ? 
+        AND n.is_read = 0
+        AND t.project_uuid IN ($placeholders)
+        GROUP BY t.project_uuid
+    ";
+    
+    $badge_stmt = $db->prepare($badge_sql);
+    if (!$badge_stmt) {
+        log_error("[PROJECT_BADGES] Prepare failed: " . $db->error);
+        foreach ($projects as &$p) {
+            $p['unread_notifications_count'] = 0;
+        }
+        return $projects;
+    }
+    
+    $params = array_merge([$user_uuid], $project_uuids);
+    $types = 's' . str_repeat('s', count($project_uuids));
+    $badge_stmt->bind_param($types, ...$params);
+    $badge_stmt->execute();
+    $badge_result = $badge_stmt->get_result();
+    
+    $badge_counts = [];
+    while ($row = $badge_result->fetch_assoc()) {
+        $badge_counts[$row['project_uuid']] = (int)$row['unread_count'];
+    }
+    $badge_stmt->close();
+    
+    log_debug("[PROJECT_BADGES] Found " . count($badge_counts) . " projects with unread notifications");
+    
+    // Добавляем поле unread_notifications_count к каждому проекту
+    foreach ($projects as &$p) {
+        $p['unread_notifications_count'] = $badge_counts[$p['uuid']] ?? 0;
+    }
+    
+    return $projects;
+}
+// ==================== BLOCK END: get_projects_with_notification_counts v1.0 ====================

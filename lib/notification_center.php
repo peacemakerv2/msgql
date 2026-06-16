@@ -128,6 +128,10 @@ class NotificationCenter {
         self::saveChangeHistory($task_uuid, $changes, $changed_by_uuid, $task['title']);
         self::broadcastTaskUpdate($task_uuid, $changes);
         
+        // ========== V1.0: Отправляем SSE для обновления бейджей проектов ==========
+        self::triggerProjectBadgeUpdate($task_uuid, 'task_updated');
+        // ========== КОНЕЦ V1.0 ==========
+        
         log_debug("[NOTIFY] === END notifyTaskChanges, sent to " . count($results) . " recipients ===");
         
         return [
@@ -558,6 +562,10 @@ class NotificationCenter {
         
         self::triggerSSEUpdate($user_uuid, $task['uuid']);
         
+        // ========== V1.0: Отправляем SSE для обновления бейджей проектов ==========
+        self::triggerProjectBadgeUpdate($task['uuid'], 'task_updated');
+        // ========== КОНЕЦ V1.0 ==========
+        
         return [
             'sent' => $email_sent || $notification_saved,
             'user_uuid' => $user_uuid,
@@ -900,4 +908,56 @@ class NotificationCenter {
         return $results;
     }
 // ==================== BLOCK END: notifyNewMessage v1.3 ====================
+
+
+    // ==================== BLOCK START: triggerProjectBadgeUpdate v1.0 ====================
+    // ver.1.0 (2026-06-16) - ОТПРАВКА SSE СОБЫТИЯ ДЛЯ ОБНОВЛЕНИЯ БЕЙДЖЕЙ ПРОЕКТОВ
+    // - При изменении задачи отправляем событие, которое обновит бейджи проектов
+    // - Вызывается из notifyTaskChanges и notifyNewTask
+
+    /**
+     * Отправляет SSE событие для обновления бейджей проектов
+     * 
+     * @param string $task_uuid UUID задачи, в которой произошли изменения
+     * @param string $event_type Тип события (task_updated, task_broadcast)
+     */
+    public static function triggerProjectBadgeUpdate($task_uuid, $event_type = 'task_updated') {
+        if (!function_exists('msgql_send_sse_event')) {
+            log_debug("[PROJECT_BADGE_SSE] msgql_send_sse_event not available");
+            return;
+        }
+        
+        $db = msgql_db();
+        
+        // Получаем project_uuid задачи
+        $stmt = $db->prepare("SELECT project_uuid FROM tasks WHERE uuid = ?");
+        if (!$stmt) {
+            log_error("[PROJECT_BADGE_SSE] Prepare failed: " . $db->error);
+            return;
+        }
+        $stmt->bind_param("s", $task_uuid);
+        $stmt->execute();
+        $task = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        
+        if (!$task || empty($task['project_uuid'])) {
+            log_debug("[PROJECT_BADGE_SSE] Task not found or no project: {$task_uuid}");
+            return;
+        }
+        
+        $project_uuid = $task['project_uuid'];
+        $event_data = [
+            'type' => 'project_badge_update',
+            'project_uuid' => $project_uuid,
+            'task_uuid' => $task_uuid,
+            'timestamp' => msgql_now_ms()
+        ];
+        
+        // Отправляем событие в проект (для обновления бейджа)
+        msgql_send_sse_event($project_uuid, 'project_badge_update', $event_data);
+        
+        log_debug("[PROJECT_BADGE_SSE] Sent project_badge_update for project {$project_uuid}");
+    }
+    // ==================== BLOCK END: triggerProjectBadgeUpdate v1.0 ====================
+    
 }

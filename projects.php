@@ -1921,6 +1921,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                 $response['is_subscribed'] = ($sub && $sub['is_active'] == 1);
             }
         }
+
+        // ==================== BLOCK START: mark_project_notifications_read v1.0 ====================
+        // ver.1.0 (2026-06-16) - ОБРАБОТЧИК ДЛЯ СБРОСА НЕПРОЧИТАННЫХ УВЕДОМЛЕНИЙ ПРОЕКТА
+        // - Помечает все уведомления по задачам проекта как прочитанные
+        // - Вызывается при клике на проект
+        elseif ($action === 'mark_project_notifications_read') {
+            $project_uuid = $_POST['project_uuid'] ?? '';
+            
+            log_debug("[MARK_PROJECT_READ] Marking project notifications as read: {$project_uuid} for user: {$current_user_uuid}");
+            
+            if (empty($project_uuid)) {
+                $response['error'] = 'Не указан проект';
+            } elseif (!msgql_can_access_project($current_user_uuid, $project_uuid, 'view')) {
+                $response['error'] = 'Нет доступа к проекту';
+            } else {
+                // Проверяем существование таблицы user_notifications
+                $table_check = $db->query("SHOW TABLES LIKE 'user_notifications'");
+                if ($table_check->num_rows == 0) {
+                    $response['success'] = true;
+                    $response['marked_count'] = 0;
+                } else {
+                    // Помечаем как прочитанные все уведомления по задачам этого проекта
+                    $sql = "
+                        UPDATE user_notifications n
+                        JOIN tasks t ON n.task_uuid = t.uuid
+                        SET n.is_read = 1
+                        WHERE n.user_uuid = ?
+                        AND n.is_read = 0
+                        AND t.project_uuid = ?
+                    ";
+                    $stmt = $db->prepare($sql);
+                    if ($stmt) {
+                        $stmt->bind_param("ss", $current_user_uuid, $project_uuid);
+                        $stmt->execute();
+                        $marked_count = $db->affected_rows;
+                        $stmt->close();
+                        
+                        log_debug("[MARK_PROJECT_READ] Marked {$marked_count} notifications as read for project {$project_uuid}");
+                        
+                        $response['success'] = true;
+                        $response['marked_count'] = $marked_count;
+                    } else {
+                        $response['error'] = 'Ошибка подготовки запроса';
+                    }
+                }
+            }
+        }
+        // ==================== BLOCK END: mark_project_notifications_read v1.0 ====================
         
         else {
             $response['error'] = 'Unknown action: ' . $action;
@@ -2090,15 +2138,17 @@ function get_all_tasks_matching_filters($project_uuid, $user_uuid, $filter_statu
 // ==================== BLOCK END: get_all_tasks_matching_filters v4.12 ====================
 
 
-// ==================== BLOCK START: get_project_tasks_sorted v4.14 ====================
+// ==================== BLOCK START: get_project_tasks_sorted v4.16 (FIXED bind_param) ====================
 // ver.4.5 - Фильтрация только корневых задач
 // ver.4.6 (2026-06-02) - УЛУЧШЕНА СОРТИРОВКА
 // ver.4.11 (2026-06-03) - ИСПРАВЛЕНА ФИЛЬТРАЦИЯ ПОДЗАДАЧ
 // ver.4.13 (2026-06-05) - ИСПРАВЛЕНА SQL-ИНЪЕКЦИЯ В ORDER BY (строгая валидация через switch)
 // ver.4.14 (2026-06-05) - ДОБАВЛЕНА ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА ТИПОВ ПАРАМЕТРОВ
+// ver.4.15 (2026-06-16) - ДОБАВЛЕН ПРИОРИТЕТ: задачи с непрочитанными уведомлениями ВСЕГДА сверху
+// ver.4.16 (2026-06-16) - ИСПРАВЛЕНА ОШИБКА bind_param: добавлена проверка количества параметров
 
 function get_project_tasks_sorted($project_uuid, $user_uuid, $page, $per_page, $sort_by, $sort_dir, $filter_statuses, $filter_assigned, $search, $is_admin, $db) {
-    log_debug("[GET_PROJECT_TASKS_SORTED] v4.14 - project_uuid: {$project_uuid}, sort_by: {$sort_by}, sort_dir: {$sort_dir}");
+    log_debug("[GET_PROJECT_TASKS_SORTED] v4.16 - project_uuid: {$project_uuid}, sort_by: {$sort_by}, sort_dir: {$sort_dir}");
     log_debug("[GET_PROJECT_TASKS_SORTED] filter_statuses: " . json_encode($filter_statuses));
     log_debug("[GET_PROJECT_TASKS_SORTED] filter_assigned: " . json_encode($filter_assigned));
     log_debug("[GET_PROJECT_TASKS_SORTED] search: '{$search}'");
@@ -2179,6 +2229,55 @@ function get_project_tasks_sorted($project_uuid, $user_uuid, $page, $per_page, $
     // Для сортировки по активности добавляем вторичную сортировку по времени создания
     $order_secondary = ($sort_by === 'last_activity') ? ', t.time DESC' : '';
     
+    // ========== V4.15: ПРОВЕРЯЕМ СУЩЕСТВОВАНИЕ ТАБЛИЦЫ user_notifications ==========
+    $table_check = $db->query("SHOW TABLES LIKE 'user_notifications'");
+    $has_notifications_table = ($table_check && $table_check->num_rows > 0);
+    
+    // ========== V4.15: ПОЛУЧАЕМ КОЛИЧЕСТВО НЕПРОЧИТАННЫХ УВЕДОМЛЕНИЙ ПО КАЖДОЙ ЗАДАЧЕ ==========
+    // Получаем все задачи, удовлетворяющие WHERE условиям
+    $all_tasks_sql = "SELECT t.uuid FROM tasks t
+                      JOIN projects p ON t.project_uuid = p.uuid
+                      LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ?
+                      {$where_clause}";
+    
+    $all_tasks_stmt = $db->prepare($all_tasks_sql);
+    $all_tasks_params = array_merge([$user_uuid], $params);
+    $all_tasks_types = "s" . $types;
+    $all_tasks_stmt->bind_param($all_tasks_types, ...$all_tasks_params);
+    $all_tasks_stmt->execute();
+    $all_tasks_result = $all_tasks_stmt->get_result();
+    $task_uuids = [];
+    while ($row = $all_tasks_result->fetch_assoc()) {
+        $task_uuids[] = $row['uuid'];
+    }
+    $all_tasks_stmt->close();
+    
+    // Получаем количество непрочитанных уведомлений по каждой задаче
+    $unread_counts = [];
+    if ($has_notifications_table && !empty($task_uuids)) {
+        $placeholders = implode(',', array_fill(0, count($task_uuids), '?'));
+        $unread_sql = "
+            SELECT n.task_uuid, COUNT(*) as unread_count
+            FROM user_notifications n
+            WHERE n.user_uuid = ?
+            AND n.is_read = 0
+            AND n.task_uuid IN ($placeholders)
+            GROUP BY n.task_uuid
+        ";
+        $unread_stmt = $db->prepare($unread_sql);
+        $unread_params = array_merge([$user_uuid], $task_uuids);
+        $unread_types = 's' . str_repeat('s', count($task_uuids));
+        $unread_stmt->bind_param($unread_types, ...$unread_params);
+        $unread_stmt->execute();
+        $unread_result = $unread_stmt->get_result();
+        while ($row = $unread_result->fetch_assoc()) {
+            $unread_counts[$row['task_uuid']] = (int)$row['unread_count'];
+        }
+        $unread_stmt->close();
+        log_debug("[GET_PROJECT_TASKS_SORTED] Found " . count($unread_counts) . " tasks with unread notifications");
+    }
+    
+    // Получаем общее количество задач
     $count_sql = "SELECT COUNT(*) as total 
                   FROM tasks t
                   JOIN projects p ON t.project_uuid = p.uuid
@@ -2200,26 +2299,77 @@ function get_project_tasks_sorted($project_uuid, $user_uuid, $page, $per_page, $
         return ['tasks' => [], 'total' => 0, 'has_more' => false];
     }
     
-    // v4.14: Безопасное использование order_column (уже проверено через switch)
-    $data_sql = "SELECT t.*, 
-                        u.name as assignee_name, 
-                        u.login as assignee_login,
-                        (SELECT MAX(m.time) FROM messages m WHERE m.task_uuid = t.uuid) as last_msg_time,
-                        (SELECT COUNT(*) FROM messages m WHERE m.task_uuid = t.uuid) as messages_count,
-                        (SELECT COUNT(*) FROM tasks WHERE parent_task_uuid = t.uuid) as subtasks_count,
-                        (SELECT COUNT(*) FROM task_files tf WHERE tf.task_uuid = t.uuid) as files_count
-                 FROM tasks t
-                 JOIN projects p ON t.project_uuid = p.uuid
-                 LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ?
-                 LEFT JOIN users u ON t.assigned_to_uuid = u.uuid
-                 {$where_clause}
-                 ORDER BY {$order_column} {$order_dir}{$order_secondary}
-                 LIMIT ? OFFSET ?";
+    // ========== V4.16: ПРАВИЛЬНОЕ ФОРМИРОВАНИЕ SQL И ПАРАМЕТРОВ ==========
+    // Базовые параметры: user_uuid для upp + все параметры из WHERE
+    $base_params = array_merge([$user_uuid], $params);
+    $base_types = "s" . $types;
     
-    $data_params = array_merge([$user_uuid], $params, [$per_page, $offset]);
-    $data_types = "s" . $types . "ii";
+    // Если таблица уведомлений существует, добавляем подзапрос unc
+    if ($has_notifications_table) {
+        // Для подзапроса unc нужен дополнительный user_uuid
+        $data_sql = "SELECT t.*, 
+                            u.name as assignee_name, 
+                            u.login as assignee_login,
+                            (SELECT MAX(m.time) FROM messages m WHERE m.task_uuid = t.uuid) as last_msg_time,
+                            (SELECT COUNT(*) FROM messages m WHERE m.task_uuid = t.uuid) as messages_count,
+                            (SELECT COUNT(*) FROM tasks WHERE parent_task_uuid = t.uuid) as subtasks_count,
+                            (SELECT COUNT(*) FROM task_files tf WHERE tf.task_uuid = t.uuid) as files_count,
+                            COALESCE(unc.unread_count, 0) as unread_notifications_count
+                     FROM tasks t
+                     JOIN projects p ON t.project_uuid = p.uuid
+                     LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ?
+                     LEFT JOIN users u ON t.assigned_to_uuid = u.uuid
+                     LEFT JOIN (
+                         SELECT task_uuid, COUNT(*) as unread_count
+                         FROM user_notifications
+                         WHERE user_uuid = ?
+                         AND is_read = 0
+                         GROUP BY task_uuid
+                     ) unc ON t.uuid = unc.task_uuid
+                     {$where_clause}
+                     ORDER BY 
+                         CASE WHEN COALESCE(unc.unread_count, 0) > 0 THEN 0 ELSE 1 END ASC,
+                         {$order_column} {$order_dir}{$order_secondary}
+                     LIMIT ? OFFSET ?";
+        
+        // Параметры: upp.user_uuid (1) + unc.user_uuid (2) + все params из WHERE + per_page + offset
+        $data_params = array_merge([$user_uuid], [$user_uuid], $params, [$per_page, $offset]);
+        $data_types = "ss" . $types . "ii";
+        
+        log_debug("[GET_PROJECT_TASKS_SORTED] Data params count: " . count($data_params) . ", types: " . $data_types);
+        
+    } else {
+        // Без подзапроса unc
+        $data_sql = "SELECT t.*, 
+                            u.name as assignee_name, 
+                            u.login as assignee_login,
+                            (SELECT MAX(m.time) FROM messages m WHERE m.task_uuid = t.uuid) as last_msg_time,
+                            (SELECT COUNT(*) FROM messages m WHERE m.task_uuid = t.uuid) as messages_count,
+                            (SELECT COUNT(*) FROM tasks WHERE parent_task_uuid = t.uuid) as subtasks_count,
+                            (SELECT COUNT(*) FROM task_files tf WHERE tf.task_uuid = t.uuid) as files_count,
+                            0 as unread_notifications_count
+                     FROM tasks t
+                     JOIN projects p ON t.project_uuid = p.uuid
+                     LEFT JOIN user_project_permissions upp ON p.uuid = upp.project_uuid AND upp.user_uuid = ?
+                     LEFT JOIN users u ON t.assigned_to_uuid = u.uuid
+                     {$where_clause}
+                     ORDER BY {$order_column} {$order_dir}{$order_secondary}
+                     LIMIT ? OFFSET ?";
+        
+        $data_params = array_merge([$user_uuid], $params, [$per_page, $offset]);
+        $data_types = "s" . $types . "ii";
+    }
     
     $stmt = $db->prepare($data_sql);
+    
+    // Проверка что количество параметров совпадает
+    if (count($data_params) !== substr_count($data_types, 's') + substr_count($data_types, 'i')) {
+        log_error("[GET_PROJECT_TASKS_SORTED] Parameter count mismatch: params=" . count($data_params) . ", types_count=" . (substr_count($data_types, 's') + substr_count($data_types, 'i')));
+        log_error("[GET_PROJECT_TASKS_SORTED] data_types: " . $data_types);
+        log_error("[GET_PROJECT_TASKS_SORTED] data_params: " . json_encode($data_params));
+        return ['tasks' => [], 'total' => 0, 'has_more' => false];
+    }
+    
     $stmt->bind_param($data_types, ...$data_params);
     $stmt->execute();
     $tasks = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
@@ -2231,9 +2381,11 @@ function get_project_tasks_sorted($project_uuid, $user_uuid, $page, $per_page, $
         $task['subtasks_count'] = (int)($task['subtasks_count'] ?? 0);
         $task['files_count'] = (int)($task['files_count'] ?? 0);
         $task['status'] = (int)($task['status'] ?? 0);
+        $task['unread_notifications_count'] = (int)($task['unread_notifications_count'] ?? 0);
+        $task['has_unread_notifications'] = ($task['unread_notifications_count'] > 0);
     }
     
-    log_debug("[GET_PROJECT_TASKS_SORTED] Returning " . count($tasks) . " tasks");
+    log_debug("[GET_PROJECT_TASKS_SORTED] Returning " . count($tasks) . " tasks, " . count(array_filter($tasks, function($t) { return $t['has_unread_notifications']; })) . " with unread notifications");
     
     return [
         'tasks' => $tasks,
@@ -2241,7 +2393,7 @@ function get_project_tasks_sorted($project_uuid, $user_uuid, $page, $per_page, $
         'has_more' => ($offset + $per_page) < $total
     ];
 }
-// ==================== BLOCK END: get_project_tasks_sorted v4.14 ====================
+// ==================== BLOCK END: get_project_tasks_sorted v4.16 ====================
 
 
 // ==================== BLOCK START: get_project_subtasks_sorted v4.8 ====================
@@ -2559,12 +2711,23 @@ function get_users_with_project_access($db, $project_uuid, $current_user_uuid, $
 }
 // ==================== BLOCK END: get_users_with_project_access v1.3 ====================
 
-function get_all_projects($user_uuid) {
-    return msgql_get_accessible_projects($user_uuid);
-}
-
 // Подготовка данных для шаблона
-$projects = get_all_projects($current_user_uuid);
+// ==================== BLOCK START: projects initialization with notification badges v1.0 ====================
+// ver.1.0 (2026-06-16) - ЗАМЕНА msgql_get_accessible_projects НА get_projects_with_notification_counts
+// - Добавлено поле unread_notifications_count для отображения бейджей на карточках проектов
+
+// Получаем проекты с количеством непрочитанных уведомлений
+if (function_exists('get_projects_with_notification_counts')) {
+    $projects = get_projects_with_notification_counts($current_user_uuid);
+    log_debug("[PROJECTS_INIT] Loaded " . count($projects) . " projects with notification counts");
+} else {
+    // Fallback на старую функцию
+    $projects = msgql_get_accessible_projects($current_user_uuid);
+    log_warning("[PROJECTS_INIT] get_projects_with_notification_counts not found, using fallback");
+}
+// ==================== BLOCK END: projects initialization with notification badges v1.0 ====================
+
+
 $users = get_all_users($db);
 $is_admin = msgql_is_admin();
 $csrf_token = msgql_csrf_get_token();
@@ -3106,6 +3269,11 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
     }
 }
 /* ==================== END FIX ==================== */
+
+.flat-task-item.has-unread-notifications {
+    background: rgba(239, 68, 68, 0.05);
+    border-left: 3px solid #ef4444;
+}
 </style>
 <script nonce="<?= CSP_NONCE ?>">window.APP_BASE = '<?= $appBase ?>'</script>
 </head>
@@ -3122,32 +3290,55 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
                 Нет доступных проектов. Обратитесь к администратору для выдачи прав.
             </div>
         <?php else: ?>
-            <?php foreach ($projects as $project): ?>
-                <div class="project-card" id="project-<?= htmlspecialchars($project['uuid']) ?>" 
-                     data-project-uuid="<?= htmlspecialchars($project['uuid']) ?>" 
-                     onclick="selectProject('<?= htmlspecialchars($project['uuid']) ?>')">
-                    <div class="project-card-header">
-                        <h3><?= htmlspecialchars($project['title']) ?></h3>
-                        <div class="project-card-meta">
-                            <span>📅 <?= htmlspecialchars($project['stamp']) ?></span>
-                            <span>👤 <?= htmlspecialchars($project['creator_name'] ?: $project['creator_login'] ?: 'Вы') ?></span>
-                        </div>
-                    </div>
-                    <div class="project-card-body">
-                        <div class="project-descr" data-desc-id="project_<?= htmlspecialchars($project['uuid']) ?>_desc">
-                            <?= msgql_parse_links_to_html($project['descr'] ?: 'Нет описания') ?>
-                        </div>
-                        <div class="project-stats">
-                            <span>📋 Задач: <?= $project['tasks_count'] ?? 0 ?></span>
-                        </div>
-                        <?php if ($is_admin || $project['created_by_uuid'] === $current_user_uuid): ?>
-                            <div class="project-actions" onclick="event.stopPropagation()">
-                                <button class="btn-secondary" onclick="editProject('<?= htmlspecialchars($project['uuid']) ?>')">✏️ Редактировать</button>
-                            </div>
-                        <?php endif; ?>
+
+        <?php foreach ($projects as $project): ?>
+            <div class="project-card" id="project-<?= htmlspecialchars($project['uuid']) ?>" 
+                 data-project-uuid="<?= htmlspecialchars($project['uuid']) ?>" 
+                 data-unread-notifications="<?= (int)($project['unread_notifications_count'] ?? 0) ?>"
+                 onclick="selectProject('<?= htmlspecialchars($project['uuid']) ?>')">
+                <div class="project-card-header">
+                    <h3><?= htmlspecialchars($project['title']) ?></h3>
+                    <div class="project-card-meta">
+                        <span>📅 <?= htmlspecialchars($project['stamp']) ?></span>
+                        <span>👤 <?= htmlspecialchars($project['creator_name'] ?: $project['creator_login'] ?: 'Вы') ?></span>
                     </div>
                 </div>
-            <?php endforeach; ?>
+                <div class="project-card-body">
+                    <div class="project-descr" data-desc-id="project_<?= htmlspecialchars($project['uuid']) ?>_desc">
+                        <?= msgql_parse_links_to_html($project['descr'] ?: 'Нет описания') ?>
+                    </div>
+                    <div class="project-stats" style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>📋 Задач: <?= $project['tasks_count'] ?? 0 ?></span>
+                        <!-- ========== БЕЙДЖ НЕПРОЧИТАННЫХ УВЕДОМЛЕНИЙ ========== -->
+                        <span class="project-notification-badge" 
+                              id="project-badge-<?= htmlspecialchars($project['uuid']) ?>"
+                              data-project-uuid="<?= htmlspecialchars($project['uuid']) ?>"
+                              style="display: <?= ((int)($project['unread_notifications_count'] ?? 0) > 0) ? 'inline-flex' : 'none' ?>; 
+                                     background: #ef4444; 
+                                     color: white; 
+                                     border-radius: 20px; 
+                                     padding: 2px 10px; 
+                                     font-size: 11px; 
+                                     font-weight: bold; 
+                                     cursor: pointer; 
+                                     transition: all 0.2s ease;
+                                     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+                                     align-items: center;
+                                     gap: 4px;"
+                             onclick="event.stopPropagation(); scrollToNotifications('<?= htmlspecialchars($project['uuid']) ?>');"
+                             title="Непрочитанные уведомления в проекте">
+                            🔔 <span id="badge-count-<?= htmlspecialchars($project['uuid']) ?>"><?= (int)($project['unread_notifications_count'] ?? 0) ?></span>
+                        </span>
+                        <!-- ========== КОНЕЦ БЕЙДЖА ========== -->
+                    </div>
+                    <?php if ($is_admin || $project['created_by_uuid'] === $current_user_uuid): ?>
+                        <div class="project-actions" onclick="event.stopPropagation()">
+                            <button class="btn-secondary" onclick="editProject('<?= htmlspecialchars($project['uuid']) ?>')">✏️ Редактировать</button>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endforeach; ?>
         <?php endif; ?>
     </div>
     
@@ -5035,6 +5226,9 @@ function copyTaskLink(taskUuid, taskTitle) {
 // ver.4.0 - Базовая версия
 // ver.4.2 (2026-06-05) - ДОБАВЛЕНО УПРАВЛЕНИЕ ИНДИКАТОРОМ ЗАГРУЗКИ
 // ver.4.3 (2026-06-05) - ИСПРАВЛЕНА ПРОБЛЕМА: индикатор скрывается при ошибках
+// ver.4.4 (2026-06-16) - ДОБАВЛЕН СБРОС БЕЙДЖА ПРИ ВЫБОРЕ ПРОЕКТА
+// - При выборе проекта скрываем красный бейдж с уведомлениями
+// - Отправляем запрос на сервер для пометки уведомлений проекта как прочитанных
 
 function selectProject(uuid) {
     logDebug('[SELECT_PROJECT] Selecting project:', uuid);
@@ -5044,6 +5238,40 @@ function selectProject(uuid) {
     if (typeof window.setPageLoadStatus === 'function') {
         window.setPageLoadStatus('loading', '⏳ Загрузка проекта...', true);
     }
+    
+    // ========== V4.4: СБРАСЫВАЕМ БЕЙДЖ ПРИ ВЫБОРЕ ПРОЕКТА ==========
+    // Скрываем бейдж на карточке проекта (оптимистичное обновление)
+    var badge = document.getElementById('project-badge-' + uuid);
+    if (badge) {
+        badge.style.display = 'none';
+        logDebug('[SELECT_PROJECT] Hidden badge for project:', uuid);
+    }
+    
+    // Отправляем запрос на сброс уведомлений для этого проекта
+    var csrfToken = window.csrfToken || '';
+    var formData = new URLSearchParams();
+    formData.append('action', 'mark_project_notifications_read');
+    formData.append('project_uuid', uuid);
+    formData.append('ajax_mode', '1');
+    addCsrfToUrlParams(formData);
+    
+    fetch(window.location.href, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData
+    })
+    .then(function(response) { return response.json(); })
+    .then(function(data) {
+        if (data.success) {
+            logDebug('[SELECT_PROJECT] Project notifications marked as read:', data.marked_count || 0);
+        } else {
+            logWarning('[SELECT_PROJECT] Failed to mark notifications as read:', data.error);
+        }
+    })
+    .catch(function(err) {
+        logError('[SELECT_PROJECT] Error marking notifications as read:', err);
+    });
+    // ========== КОНЕЦ V4.4 ==========
     
     loadedFilesCache = {};
     
@@ -5081,7 +5309,7 @@ function selectProject(uuid) {
         if (tasksArea) tasksArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 300);
 }
-// ==================== BLOCK END: selectProject v4.3 ====================
+// ==================== BLOCK END: selectProject v4.4 ====================
 
 function resetFiltersAndLoad() {
     logDebug('[RESET_FILTERS] Resetting all filters');
@@ -5314,8 +5542,11 @@ function loadProjectTasks(resetPage) {
 
 
 
-// ==================== BLOCK START: renderTaskList v4.14 (with auto-expand when filters active) ====================
+// ==================== BLOCK START: renderTaskList v4.15 (with unread notifications priority) ====================
 // ver.4.14 (2026-06-11) - ПРИ ФИЛЬТРАЦИИ ПОДЗАДАЧИ ПРИНУДИТЕЛЬНО РАСКРЫВАЮТСЯ
+// ver.4.15 (2026-06-16) - ДОБАВЛЕНА ПОДСВЕТКА ЗАДАЧ С НЕПРОЧИТАННЫМИ УВЕДОМЛЕНИЯМИ
+// - Задачи с непрочитанными уведомлениями получают специальный класс и бейдж
+// - Бейдж отображается рядом с количеством сообщений
 
 function renderTaskList(tasks) {
     var container = document.getElementById('tasks-list-container');
@@ -5362,6 +5593,11 @@ function renderTaskList(tasks) {
         // Для родительских контекстов при фильтрации НЕ сворачиваем
         var collapsedClass = (isParentContext && !hasActiveFilters && isCollapsedByDefault) ? ' collapsed-by-default' : '';
         
+        // ========== V4.15: КЛАСС ДЛЯ ЗАДАЧ С НЕПРОЧИТАННЫМИ УВЕДОМЛЕНИЯМИ ==========
+        var hasUnreadNotifications = (task.unread_notifications_count && task.unread_notifications_count > 0);
+        var unreadClass = hasUnreadNotifications ? ' has-unread-notifications' : '';
+        // ========== КОНЕЦ V4.15 ==========
+        
         var descrHtml = '';
         var descrText = task.descr || '';
         var descId = 'task_' + task.uuid + '_desc';
@@ -5380,7 +5616,14 @@ function renderTaskList(tasks) {
         
         var parentContextBadge = isParentContext ? '<span class="flat-task-badge" style="background: rgba(79,124,255,0.3);">📁 Контекст фильтра</span>' : '';
         
-        html += '<div class="flat-task-item' + parentContextClass + collapsedClass + '" data-task-uuid="' + task.uuid + '" data-is-parent-context="' + (isParentContext ? 'true' : 'false') + '">';
+        // ========== V4.15: БЕЙДЖ НЕПРОЧИТАННЫХ УВЕДОМЛЕНИЙ ==========
+        var unreadBadge = '';
+        if (hasUnreadNotifications) {
+            unreadBadge = '<span class="flat-task-badge clickable unread-badge" style="background: rgba(239,68,68,0.2); color: #f87171; cursor: pointer;" onclick="event.stopPropagation(); openTaskMessagesByUuid(\'' + task.uuid + '\')" title="Непрочитанные уведомления в задаче">🔔 ' + task.unread_notifications_count + '</span>';
+        }
+        // ========== КОНЕЦ V4.15 ==========
+        
+        html += '<div class="flat-task-item' + parentContextClass + collapsedClass + unreadClass + '" data-task-uuid="' + task.uuid + '" data-is-parent-context="' + (isParentContext ? 'true' : 'false') + '">';
         html += '<div class="flat-task-row-link" style="display: block; text-decoration: none; color: inherit;" data-task-url="' + taskUrl + '" data-task-title="' + escapedTitle + '">';
         html += '<div class="flat-task-row" style="cursor: pointer;">';
         html += '<div class="flat-task-checkbox ' + (isCompleted ? 'completed' : '') + '" onclick="event.stopPropagation(); toggleTaskStatus(event, \'' + task.uuid + '\', ' + (!isCompleted) + ')"></div>';
@@ -5395,6 +5638,9 @@ function renderTaskList(tasks) {
         if (task.files_count > 0) html += '<span class="flat-task-badge">📎 ' + task.files_count + '</span>';
         if (hasSubtasks) html += '<span class="flat-task-badge clickable subtasks-toggle" data-task-uuid="' + task.uuid + '">📋 ' + task.subtasks_count + '</span>';
         if (parentContextBadge) html += parentContextBadge;
+        // ========== V4.15: ДОБАВЛЯЕМ БЕЙДЖ УВЕДОМЛЕНИЙ ==========
+        if (unreadBadge) html += unreadBadge;
+        // ========== КОНЕЦ V4.15 ==========
         html += '</div>';
         html += '<div class="task-files-container" id="' + filesContainerId + '"><span class="files-loading">⏳ Загрузка файлов...</span></div>';
         html += '</div>';
@@ -5517,7 +5763,7 @@ function renderTaskList(tasks) {
 
     logDebug('[RENDER_TASK_LIST] Handlers attached, rendered ' + tasks.length + ' tasks');
 }
-// ==================== BLOCK END: renderTaskList v4.14 ====================
+// ==================== BLOCK END: renderTaskList v4.15 ====================
 
 // ==================== BLOCK START: Container Diagnostics v1.0 ====================
 // ver.1.0 (2026-06-05) - Диагностика видимости контейнеров подзадач
@@ -6540,6 +6786,148 @@ setTimeout(function() {
     ensureSubtaskHandlers();
 }, 1000);
 // ==================== BLOCK END: ensureSubtaskHandlers v1.0 ====================
+
+
+// ==================== BLOCK START: Project notification badge updater v1.0 ====================
+// ver.1.0 (2026-06-16) - ФУНКЦИЯ ОБНОВЛЕНИЯ БЕЙДЖА ПРОЕКТА
+// - Обновляет количество непрочитанных уведомлений на карточке проекта
+// - Скрывает бейдж, если уведомлений нет
+
+function updateProjectBadge(projectUuid, count) {
+    var badge = document.getElementById('project-badge-' + projectUuid);
+    var countSpan = document.getElementById('badge-count-' + projectUuid);
+    
+    if (!badge || !countSpan) {
+        logDebug('[PROJECT_BADGE] Badge elements not found for project:', projectUuid);
+        return;
+    }
+    
+    var countNum = parseInt(count, 10) || 0;
+    
+    if (countNum > 0) {
+        countSpan.textContent = countNum > 99 ? '99+' : countNum;
+        badge.style.display = 'inline-flex';
+        logDebug('[PROJECT_BADGE] Updated badge for project ' + projectUuid + ' to ' + countNum);
+    } else {
+        badge.style.display = 'none';
+        logDebug('[PROJECT_BADGE] Hidden badge for project ' + projectUuid);
+    }
+}
+
+// Функция для прокрутки к уведомлениям проекта (вызывается по клику на бейдж)
+function scrollToNotifications(projectUuid) {
+    logDebug('[PROJECT_BADGE] Clicked badge for project:', projectUuid);
+    
+    // Показываем/открываем задачи проекта
+    var projectCard = document.querySelector('.project-card[data-project-uuid="' + projectUuid + '"]');
+    if (projectCard) {
+        projectCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        projectCard.classList.add('block-highlight');
+        setTimeout(function() {
+            projectCard.classList.remove('block-highlight');
+        }, 2000);
+    }
+    
+    // Выбираем проект, чтобы открыть задачи
+    selectProject(projectUuid);
+}
+
+// Функция обновления всех бейджей проектов (вызывается при получении SSE-события)
+function refreshAllProjectBadges() {
+    var csrfToken = window.csrfToken || '';
+    var url = window.APP_BASE + '/get_project_badges.php';
+    
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'csrf_token=' + encodeURIComponent(csrfToken)
+    })
+    .then(function(response) {
+        if (!response.ok) {
+            throw new Error('HTTP ' + response.status);
+        }
+        return response.json();
+    })
+    .then(function(data) {
+        if (data.success && data.badges) {
+            logDebug('[PROJECT_BADGE] Received badges data:', data.badges);
+            for (var projectUuid in data.badges) {
+                if (data.badges.hasOwnProperty(projectUuid)) {
+                    updateProjectBadge(projectUuid, data.badges[projectUuid]);
+                }
+            }
+        }
+    })
+    .catch(function(err) {
+        logError('[PROJECT_BADGE] Error fetching badges:', err);
+    });
+}
+
+// Экспортируем функции в глобальную область
+window.updateProjectBadge = updateProjectBadge;
+window.scrollToNotifications = scrollToNotifications;
+window.refreshAllProjectBadges = refreshAllProjectBadges;
+
+logDebug('[PROJECT_BADGE] Functions initialized v1.0');
+// ==================== BLOCK END: Project notification badge updater v1.0 ====================
+
+
+
+// ==================== BLOCK START: SSE notification badge update handler v1.0 ====================
+// ver.1.0 (2026-06-16) - ОБРАБОТЧИК ДЛЯ ОБНОВЛЕНИЯ БЕЙДЖЕЙ ПРОЕКТОВ ЧЕРЕЗ SSE
+// - При получении события task_updated или task_broadcast обновляем бейджи
+
+// Подписываемся на SSE события для обновления бейджей проектов
+if (window.SSE && typeof window.SSE.addListener === 'function') {
+    // Если SSE имеет систему подписок, добавляем слушатель
+    window.SSE.addListener('task_updated', function(data) {
+        logDebug('[SSE_PROJECT_BADGE] task_updated received, refreshing badges');
+        if (typeof window.refreshAllProjectBadges === 'function') {
+            setTimeout(window.refreshAllProjectBadges, 500);
+        }
+    });
+    
+    window.SSE.addListener('task_broadcast', function(data) {
+        logDebug('[SSE_PROJECT_BADGE] task_broadcast received, refreshing badges');
+        if (typeof window.refreshAllProjectBadges === 'function') {
+            setTimeout(window.refreshAllProjectBadges, 500);
+        }
+    });
+    
+    logDebug('[SSE_PROJECT_BADGE] SSE listeners attached');
+} else {
+    // Fallback: периодическое обновление через интервал
+    logDebug('[SSE_PROJECT_BADGE] SSE not available, using interval fallback');
+    setInterval(function() {
+        if (typeof window.refreshAllProjectBadges === 'function') {
+            window.refreshAllProjectBadges();
+        }
+    }, 60000); // Обновляем каждую минуту
+}
+
+// Также обновляем при возвращении на вкладку
+document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+        logDebug('[SSE_PROJECT_BADGE] Tab became visible, refreshing badges');
+        setTimeout(function() {
+            if (typeof window.refreshAllProjectBadges === 'function') {
+                window.refreshAllProjectBadges();
+            }
+        }, 1000);
+    }
+});
+
+// Инициализируем бейджи при загрузке страницы
+setTimeout(function() {
+    if (typeof window.refreshAllProjectBadges === 'function') {
+        window.refreshAllProjectBadges();
+    }
+}, 2000);
+
+logDebug('[SSE_PROJECT_BADGE] Handler initialized v1.0');
+// ==================== BLOCK END: SSE notification badge update handler v1.0 ====================
+
+
 
 </script>
 
