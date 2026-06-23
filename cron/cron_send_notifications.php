@@ -349,7 +349,8 @@ foreach ($users as $user) {
     }
     write_log("  → New tasks: " . count($tasks));
     
-    // НОВЫЕ СООБЩЕНИЯ (только непрочитанные)
+
+    // НОВЫЕ СООБЩЕНИЯ (только непрочитанные) - С УЧЕТОМ ПОДПИСЧИКОВ
     $messages_sql = "SELECT m.uuid, m.text, m.stamp, 'message' as type, m.time, m.is_read,
                             t.uuid as task_uuid, t.title as task_title,
                             p.title as project_title,
@@ -361,11 +362,22 @@ foreach ($users as $user) {
                      WHERE m.time > ?
                      AND m.user_uuid != ?
                      AND m.is_read = 0
-                     AND (p.created_by_uuid = ? OR t.assigned_to_uuid = ?)
+                     AND (
+                         p.created_by_uuid = ? 
+                         OR t.assigned_to_uuid = ? 
+                         OR EXISTS (
+                             SELECT 1 FROM task_subscribers ts 
+                             WHERE ts.task_uuid = t.uuid 
+                             AND ts.user_uuid = ? 
+                             AND ts.is_active = 1
+                         )
+                     )
                      ORDER BY m.time DESC
                      LIMIT 20";
     $stmt = $db->prepare($messages_sql);
-    $stmt->bind_param("siss", $since_time, $user['uuid'], $user['uuid'], $user['uuid']);
+    // ИСПРАВЛЕНО: тип "sisss" - 5 параметров (s - string, i - int, s - string, s - string, s - string)
+    $stmt->bind_param("sisss", $since_time, $user['uuid'], $user['uuid'], $user['uuid'], $user['uuid']);
+    //                   s          i           s           s           s
     $stmt->execute();
     $messages = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     foreach ($messages as $msg) {

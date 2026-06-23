@@ -2711,6 +2711,78 @@ function get_users_with_project_access($db, $project_uuid, $current_user_uuid, $
 }
 // ==================== BLOCK END: get_users_with_project_access v1.3 ====================
 
+
+function parseDescriptionLinks($text) {
+    if (!$text) return '';
+    
+    // ШАГ 1: НЕ ЭКРАНИРУЕМ — работаем с сырым текстом
+    $result = $text;
+    
+    // ========== Markdown ==========
+    
+    // Жирный
+    $result = preg_replace('/\*\*(.+?)\*\*/', '<strong>$1</strong>', $result);
+    $result = preg_replace('/__([^_]+)__/', '<strong>$1</strong>', $result);
+    
+    // Курсив
+    $result = preg_replace('/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/', '<em>$1</em>', $result);
+    $result = preg_replace('/_(.+?)_/', '<em>$1</em>', $result);
+    
+    // Зачеркивание
+    $result = preg_replace('/~~(.+?)~~/', '<del>$1</del>', $result);
+    
+    // Код (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
+    $result = preg_replace_callback('/`([^`]+)`/', function($m) {
+        return '<code>' . htmlspecialchars($m[1], ENT_QUOTES, 'UTF-8') . '</code>';
+    }, $result);
+    
+    // Блоки кода (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
+    $result = preg_replace_callback('/```([a-z]*)\n(.*?)\n```/s', function($m) {
+        $lang = $m[1];
+        $code = htmlspecialchars($m[2], ENT_QUOTES, 'UTF-8');
+        $langAttr = $lang ? ' class="language-' . $lang . '"' : '';
+        return '<pre><code' . $langAttr . '>' . $code . '</code></pre>';
+    }, $result);
+    
+    // Заголовки (в начале строки)
+    $result = preg_replace('/^### (.+)$/m', '<h3>$1</h3>', $result);
+    $result = preg_replace('/^## (.+)$/m', '<h2>$1</h2>', $result);
+    $result = preg_replace('/^# (.+)$/m', '<h1>$1</h1>', $result);
+    
+    // Заголовки (в любом месте)
+    $result = preg_replace('/###\s+([^\n<]+)/', '<h3>$1</h3>', $result);
+    $result = preg_replace('/##\s+([^\n<]+)/', '<h2>$1</h2>', $result);
+    $result = preg_replace('/#\s+([^\n<]+)/', '<h1>$1</h1>', $result);
+    
+    // Списки
+    $result = preg_replace('/^- (.+)$/m', '<li>$1</li>', $result);
+    $result = preg_replace('/^\* (.+)$/m', '<li>$1</li>', $result);
+    $result = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ul>$1</ul>', $result);
+    
+    $result = preg_replace('/^\d+\. (.+)$/m', '<li>$1</li>', $result);
+    $result = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ol>$1</ol>', $result);
+    
+    // Разделители
+    $result = preg_replace('/^(---|\*\*\*|___)$/m', '<hr>', $result);
+    
+    // Ссылки (ЭКРАНИРУЕМ URL)
+    $result = preg_replace_callback('/\[([^\]]+)\]\(([^)]+)\)/', function($m) {
+        return '<a href="' . htmlspecialchars($m[2], ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener noreferrer">' . $m[1] . '</a>';
+    }, $result);
+    
+    // Внешние ссылки (ЭКРАНИРУЕМ URL)
+    $urlRegex = '/(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/i';
+    $result = preg_replace_callback($urlRegex, function($m) {
+        return '<a href="' . htmlspecialchars($m[0], ENT_QUOTES, 'UTF-8') . '" class="external-link" target="_blank" rel="noopener noreferrer">' . $m[0] . '</a>';
+    }, $result);
+    
+    // Переносы строк
+    $result = nl2br($result);
+    
+    return $result;
+}
+
+
 // Подготовка данных для шаблона
 // ==================== BLOCK START: projects initialization with notification badges v1.0 ====================
 // ver.1.0 (2026-06-16) - ЗАМЕНА msgql_get_accessible_projects НА get_projects_with_notification_counts
@@ -2985,8 +3057,31 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
     user-select: text !important;
     -webkit-user-select: text !important;
     cursor: text !important;
+    overflow: hidden;          /* ← ДОБАВИТЬ */
+    max-width: 100% !important; /* ← ДОБАВИТЬ */
+    box-sizing: border-box !important; /* ← ДОБАВИТЬ */
 }
 .task-description-empty { font-style: italic; color: rgba(233,238,252,.4); }
+
+/* Списки внутри описаний задач и проектов */
+.task-description ul,
+.task-description ol,
+.project-descr ul,
+.project-descr ol {
+    padding-left: 24px !important;
+    margin: 4px 0 !important;
+    list-style-position: outside;
+    overflow: hidden;
+}
+
+.task-description li,
+.project-descr li {
+    margin: 2px 0 !important;
+    padding-left: 4px !important;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
+}
 
 .collapsible-description { position: relative; word-break: break-word; white-space: pre-wrap; }
 .collapsible-description.collapsed {
@@ -3134,7 +3229,18 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
     .flat-task-meta { width: 100%; }
     .tasks-pagination { flex-wrap: wrap; }
     .projects-grid { grid-template-columns: 1fr; gap: 12px; }
-    .task-description, .task-description-empty { margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; }
+    .task-description, .task-description-empty { 
+        margin-left: 0 !important; 
+        margin-right: 0 !important; 
+        width: 100% !important; 
+        max-width: 100% !important;   /* ← ДОБАВИТЬ */
+        box-sizing: border-box !important; /* ← ДОБАВИТЬ */
+        overflow: hidden !important;      /* ← ДОБАВИТЬ */
+    }
+    .task-description ul,
+    .task-description ol {
+        padding-left: 20px !important;
+    }
     .task-files-container { margin-left: 0 !important; }
     .subtasks-container { margin-left: 16px; }
     .collapsible-description-toggle { margin-left: 0; }
@@ -3153,6 +3259,7 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
     border-bottom: 1px solid rgba(255,255,255,0.05);
     margin-left: 24px;
     padding-left: 8px;
+    overflow: hidden;           /* ← ДОБАВИТЬ */
 }
 .subtask-item:last-child {
     border-bottom: none;
@@ -3164,6 +3271,18 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
 .flat-task-item .subtasks-container {
     border-left: 2px solid rgba(79,124,255,0.2);
     margin-left: 24px;
+    overflow: hidden;           /* ← ДОБАВИТЬ */
+}
+
+/* ========== ДОБАВИТЬ НОВЫЙ БЛОК ========== */
+/* Убираем выступы у описаний внутри подзадач */
+.subtask-item .task-description,
+.subtask-item .task-description-empty {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
 }
 
 
@@ -3270,10 +3389,120 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
 }
 /* ==================== END FIX ==================== */
 
-.flat-task-item.has-unread-notifications {
-    background: rgba(239, 68, 68, 0.05);
-    border-left: 3px solid #ef4444;
+/* ==================== BLOCK START: Code block styles for task details panel v1.0 ==================== */
+/* ver.1.0 (2026-06-17) - Стили для блоков кода в панели деталей задач */
+
+/* Блоки кода в панели деталей */
+.task-details-description pre,
+.task-details-description code {
+    background: #0f172a !important;
+    border: 1px solid #2c2c3e !important;
+    border-radius: 8px !important;
+    padding: 12px 16px !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 13px !important;
+    color: #e0e0e0 !important;
+    display: block !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    margin: 8px 0 !important;
+    overflow-x: auto !important;
+    line-height: 1.6 !important;
 }
+
+/* Внутренний код внутри pre */
+.task-details-description pre code {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 13px !important;
+    color: #e0e0e0 !important;
+    display: block !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    line-height: 1.6 !important;
+}
+
+/* Инлайн-код внутри текста (не в pre) */
+.task-details-description code:not(pre code) {
+    background: #1a1a2e !important;
+    padding: 2px 8px !important;
+    border-radius: 4px !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 13px !important;
+    color: #f0b050 !important;
+    border: 1px solid #2c2c3e !important;
+    display: inline !important;
+}
+
+/* Заголовки в панели */
+.task-details-description h1,
+.task-details-description h2,
+.task-details-description h3,
+.task-details-description h4 {
+    margin: 16px 0 8px 0 !important;
+    font-weight: 600 !important;
+    color: #e9eefc !important;
+    word-break: break-word !important;
+}
+.task-details-description h1 { font-size: 1.6em !important; border-bottom: 1px solid rgba(79,124,255,0.2) !important; padding-bottom: 4px !important; }
+.task-details-description h2 { font-size: 1.3em !important; color: #70a0ff !important; }
+.task-details-description h3 { font-size: 1.1em !important; color: #c0d0f0 !important; }
+.task-details-description h4 { font-size: 1.0em !important; color: #e0e0e0 !important; }
+
+/* Жирный текст */
+.task-details-description strong {
+    color: #e9eefc !important;
+    font-weight: 700 !important;
+}
+
+/* Курсив */
+.task-details-description em {
+    font-style: italic !important;
+    color: #c0d0f0 !important;
+}
+
+/* Списки */
+.task-details-description ul,
+.task-details-description ol {
+    padding-left: 24px !important;
+    margin: 8px 0 !important;
+}
+.task-details-description li {
+    margin: 4px 0 !important;
+    color: #e0e0e0 !important;
+}
+
+/* Горизонтальные разделители */
+.task-details-description hr {
+    border: none !important;
+    border-top: 1px solid #2c2c3e !important;
+    margin: 16px 0 !important;
+}
+
+/* Ссылки */
+.task-details-description a {
+    color: #70a0ff !important;
+    text-decoration: underline !important;
+    word-break: break-all !important;
+}
+.task-details-description a:hover {
+    color: #90b0ff !important;
+}
+
+/* Для мобильных устройств */
+@media (max-width: 768px) {
+    .task-details-description pre,
+    .task-details-description pre code {
+        font-size: 12px !important;
+        padding: 8px 12px !important;
+    }
+    .task-details-description h1 { font-size: 1.4em !important; }
+    .task-details-description h2 { font-size: 1.2em !important; }
+    .task-details-description h3 { font-size: 1.0em !important; }
+}
+/* ==================== BLOCK END: Code block styles for task details panel v1.0 ==================== */
 </style>
 <script nonce="<?= CSP_NONCE ?>">window.APP_BASE = '<?= $appBase ?>'</script>
 </head>
@@ -3305,7 +3534,7 @@ a{color:#9bb7ff; text-decoration:none;} a:hover{text-decoration:underline;}
                 </div>
                 <div class="project-card-body">
                     <div class="project-descr" data-desc-id="project_<?= htmlspecialchars($project['uuid']) ?>_desc">
-                        <?= msgql_parse_links_to_html($project['descr'] ?: 'Нет описания') ?>
+                         <?= parseDescriptionLinks($project['descr'] ?: 'Нет описания') ?>
                     </div>
                     <div class="project-stats" style="display: flex; justify-content: space-between; align-items: center;">
                         <span>📋 Задач: <?= $project['tasks_count'] ?? 0 ?></span>
@@ -3833,6 +4062,171 @@ function restoreHighlightAfterRender() {
 
 function escapeHtml(text) { if (!text) return ''; var div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
 
+function parseDescriptionLinks(text) {
+    if (!text) return '';
+    
+    logDebug('[PARSE_DESCRIPTION_JS] v7.1 - FIXED list rendering');
+    
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+    
+    var result = text;
+    
+    // ========== БЛОКИ КОДА (ЭКРАНИРУЕМ) ==========
+    result = result.replace(/```([a-z]*)\n([\s\S]*?)\n```/g, function(match, lang, code) {
+        var langAttr = lang ? ' class="language-' + lang + '"' : '';
+        return '<pre><code' + langAttr + '>' + escapeHtml(code) + '</code></pre>';
+    });
+    
+    result = result.replace(/``\n([\s\S]*?)\n``/g, function(match, code) {
+        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+    });
+    
+    result = result.replace(/`\n([\s\S]*?)\n`/g, function(match, code) {
+        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+    });
+    
+    // Инлайн-код
+    result = result.replace(/(?<!<code>)(?<!<pre>)(?<!<\/code>)(?<!<\/pre>)`([^`\n]+)`(?!<\/code>)(?!<\/pre>)/g, function(match, code) {
+        return '<code>' + escapeHtml(code) + '</code>';
+    });
+    
+    // ========== MARKDOWN ==========
+    
+    // Жирный
+    result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    result = result.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    
+    // Курсив
+    result = result.replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>');
+    result = result.replace(/_(.+?)_/g, '<em>$1</em>');
+    
+    // Зачеркивание
+    result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    
+    // ========== СПИСКИ (ДО ПРЕОБРАЗОВАНИЯ ПЕРЕНОСОВ) ==========
+    // Нумерованные списки: 1. текст
+    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
+    // Маркированные списки: - текст или * текст
+    result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
+    
+    // Оборачиваем последовательные <li> в <ul>/<ol>
+    // Сначала нумерованные
+    result = result.replace(/((?:<li>.*<\/li>\s*)+)/g, function(match) {
+        // Проверяем, содержит ли match нумерованный список
+        if (match.indexOf('</li>') !== -1) {
+            // Простая проверка: если есть цифры в начале строк, то это ol
+            var hasNumbers = /<li>\d+\./.test(match);
+            if (hasNumbers) {
+                // Удаляем цифры из <li> (они уже есть в тексте)
+                var cleaned = match.replace(/<li>\d+\.\s+/g, '<li>');
+                return '<ol>' + cleaned + '</ol>';
+            }
+            return '<ul>' + match + '</ul>';
+        }
+        return match;
+    });
+    
+    // ========== ЗАГОЛОВКИ ==========
+    result = result.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    result = result.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    result = result.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    
+    result = result.replace(/###\s+([^\n<]+)/g, '<h3>$1</h3>');
+    result = result.replace(/##\s+([^\n<]+)/g, '<h2>$1</h2>');
+    result = result.replace(/#\s+([^\n<]+)/g, '<h1>$1</h1>');
+    
+    // ========== РАЗДЕЛИТЕЛИ ==========
+    result = result.replace(/^(---|\*\*\*|___)$/gm, '<hr>');
+    
+    // ========== ЦИТАТЫ ==========
+    result = result.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+    
+    // ========== ССЫЛКИ ==========
+    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, linkText, url) {
+        var lowerUrl = url.toLowerCase();
+        if (lowerUrl.indexOf('javascript:') === 0 || 
+            lowerUrl.indexOf('data:') === 0 || 
+            lowerUrl.indexOf('vbscript:') === 0) {
+            return linkText;
+        }
+        var safeUrl = escapeHtml(url);
+        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return '<a href="' + safeUrl + '"' + targetAttr + '>' + linkText + '</a>';
+    });
+    
+    // Внешние ссылки
+    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
+    result = result.replace(urlRegex, function(url) {
+        var lowerUrl = url.toLowerCase();
+        if (lowerUrl.indexOf('javascript:') === 0 || 
+            lowerUrl.indexOf('data:') === 0 || 
+            lowerUrl.indexOf('vbscript:') === 0) {
+            return url;
+        }
+        var safeUrl = escapeHtml(url);
+        var isTelegram = (lowerUrl.indexOf('tg://') === 0 || lowerUrl.indexOf('telegram://') === 0);
+        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
+        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        var displayText = url;
+        if (displayText.length > 80) {
+            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
+        }
+        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + displayText + '</a>';
+    });
+    
+    // ========== ПРЕОБРАЗОВАНИЕ ПЕРЕНОСОВ СТРОК (ТОЛЬКО ОСТАВШИЕСЯ) ==========
+    // Разбиваем по строкам, но сохраняем HTML-теги
+    var lines = result.split('\n');
+    var processedLines = [];
+    
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        // Пропускаем строки, которые уже являются HTML-тегами (содержат <...>)
+        if (/^<[a-z]/.test(line.trim())) {
+            processedLines.push(line);
+        } else {
+            // Обычный текст - заменяем перенос на <br>
+            processedLines.push(line);
+        }
+    }
+    
+    // Собираем обратно с <br> между строками, но не внутри HTML-блоков
+    result = processedLines.join('\n');
+    
+    // Финальное преобразование: все \n, которые не внутри HTML-тегов, заменяем на <br>
+    // Простой способ: разделяем по строкам, смотрим, не является ли строка HTML-тегом
+    var finalLines = result.split('\n');
+    var finalResult = [];
+    
+    for (var j = 0; j < finalLines.length; j++) {
+        var line = finalLines[j];
+        // Если строка начинается с < и это HTML-тег, оставляем как есть
+        if (/^\s*<[a-z]/.test(line) || /^\s*<\/[a-z]/.test(line)) {
+            finalResult.push(line);
+        } else {
+            // Иначе добавляем <br> (но не в конце, если следующий элемент тоже HTML)
+            finalResult.push(line);
+            if (j < finalLines.length - 1) {
+                // Проверяем следующую строку
+                var nextLine = finalLines[j + 1];
+                if (!/^\s*<[a-z]/.test(nextLine) && !/^\s*<\/[a-z]/.test(nextLine)) {
+                    finalResult.push('<br>');
+                }
+            }
+        }
+    }
+    
+    result = finalResult.join('');
+    
+    logDebug('[PARSE_DESCRIPTION_JS] Final output length: ' + result.length);
+    return result;
+}
+
 function formatDate(ts) {
     if (!ts || ts === null || ts === 0) return '';
     var d = new Date(parseInt(ts));
@@ -4123,8 +4517,15 @@ function loadSubtasks(parentUuid, containerId, page, append) {
         if (listDiv) listDiv.innerHTML = '<div style="padding:16px; color:#f87171; text-align:center;">❌ Ошибка загрузки подзадач</div>';
         return Promise.resolve();
     });
+
+    setTimeout(initCollapsibleDescriptions, 300);
 }
 // ==================== BLOCK END: loadSubtasks v4.7 ====================
+
+// ==================== BLOCK START: renderSubtasksList v2.0 (with Markdown support) ====================
+// ver.1.0 - Базовая версия
+// ver.2.0 (2026-06-17) - ДОБАВЛЕНА ПОДДЕРЖКА MARKDOWN В ОПИСАНИЯХ ПОДЗАДАЧ
+// - Используется parseDescriptionLinks (уже содержит Markdown)
 
 function renderSubtasksList(tasks, parentUuid) {
     if (!tasks || tasks.length === 0) return '';
@@ -4140,6 +4541,7 @@ function renderSubtasksList(tasks, parentUuid) {
         var subBtnText = isSubscribed ? '🔕 Отписаться' : '🔔 Подписаться';
         var subBtnClass = isSubscribed ? 'subscribed' : '';
         
+        // ========== v2.0: Описание обрабатывается через parseDescriptionLinks (с Markdown) ==========
         var descrHtml = '';
         var descrText = t.descr || '';
         var descId = 'task_' + t.uuid + '_desc';
@@ -4179,8 +4581,9 @@ function renderSubtasksList(tasks, parentUuid) {
         html += '<button class="btn-messages-icon" onclick="openTaskMessagesByUuid(\'' + t.uuid + '\')">💬</button>';
 
         if (t.files_count > 0) {
-            html += '<a href="<?= $appBase ?>/files.php?task=' + t.uuid + '" class="btn-secondary" style="padding:4px 8px;font-size:11px; text-decoration: none;" target="_blank" title="Все файлы задачи">📎 Файлы</a>';
+            html += '<a href="' + window.APP_BASE + '/files.php?task=' + t.uuid + '" class="btn-secondary" style="padding:4px 8px;font-size:11px; text-decoration: none;" target="_blank" title="Все файлы задачи">📎 Файлы</a>';
         }
+
         html += '</div>';
         html += '</div>';
         html += '</div>';
@@ -4195,7 +4598,10 @@ function renderSubtasksList(tasks, parentUuid) {
         html += '</div>';
     }
     
-    // Добавляем обработчик клика для копирования ссылки для подзадач
+    setTimeout(function() {
+        initCollapsibleDescriptions();
+    }, 200);
+
     setTimeout(function() {
         var container = document.getElementById('children-' + parentUuid);
         if (container) {
@@ -4208,14 +4614,12 @@ function renderSubtasksList(tasks, parentUuid) {
                 }
                 
                 rows[j].addEventListener('click', function(e) {
-                    // Если есть выделение текста - не копируем ссылку
                     if (isSelectingText) {
                         logDebug('[SUBTASK_ROW_CLICK] Blocked by isSelectingText flag');
                         e.stopPropagation();
                         return;
                     }
                     
-                    // Проверяем выделение на момент клика
                     var selection = window.getSelection();
                     if (selection && selection.toString().trim().length > 0) {
                         logDebug('[SUBTASK_ROW_CLICK] Blocked by active selection');
@@ -4223,12 +4627,10 @@ function renderSubtasksList(tasks, parentUuid) {
                         return;
                     }
                     
-                    // Проверяем, что клик был не по кнопкам
                     if (e.target.closest('.flat-task-actions, .flat-task-checkbox, .btn-secondary, .btn-messages-icon, .subtasks-toggle, .task-file-item')) {
                         return;
                     }
                     
-                    // Проверяем, не кликнули ли по текстовой области
                     if (e.target.closest('.task-description, .task-description-empty, .flat-task-title')) {
                         logDebug('[SUBTASK_ROW_CLICK] Click on text area, skipping copy');
                         return;
@@ -4256,51 +4658,9 @@ function renderSubtasksList(tasks, parentUuid) {
     restoreHighlightAfterRender();
     return html;
 }
+// ==================== BLOCK END: renderSubtasksList v2.0 ====================
 
 // ========== ОСНОВНЫЕ ФУНКЦИИ ==========
-
-// ==================== BLOCK START: parseDescriptionLinks v2.0 (XSS fix) ====================
-// ver.1.0 - Базовая версия
-// ver.2.0 (2026-06-05) - ИСПРАВЛЕНА XSS УЯЗВИМОСТЬ
-// - Блокировка javascript:, data:, vbscript: схем
-// - Экранирование URL перед вставкой в href
-// - Двойное экранирование отображаемого текста
-
-function parseDescriptionLinks(text) {
-    if (!text) return '';
-    var escaped = escapeHtml(text);
-    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
-    
-    return escaped.replace(urlRegex, function(match) {
-        // v2.0: Блокируем опасные схемы (XSS защита)
-        var lowerMatch = match.toLowerCase();
-        if (lowerMatch.indexOf('javascript:') === 0 || 
-            lowerMatch.indexOf('data:') === 0 || 
-            lowerMatch.indexOf('vbscript:') === 0) {
-            logDebug('[XSS_BLOCK] Blocked dangerous URL scheme: ' + match.substring(0, 100));
-            return match;
-        }
-        
-        // Очищаем URL от потенциально опасных символов
-        var safeUrl = match.replace(/['"]/g, '');
-        safeUrl = safeUrl.replace(/[<>]/g, '');
-        
-        var isTelegram = lowerMatch.indexOf('tg://') === 0 || lowerMatch.indexOf('telegram://') === 0;
-        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
-        var targetAttr = (lowerMatch.indexOf('mailto:') === 0 || lowerMatch.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
-        
-        // Отображаемый текст также экранируем
-        var displayText = escapeHtml(match);
-        if (displayText.length > 80) {
-            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
-        }
-        
-        logDebug('[LINK_PARSER] Safe link generated: ' + safeUrl.substring(0, 100));
-        
-        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + ' title="' + escapeHtml(match) + '">' + displayText + '</a>';
-    });
-}
-// ==================== BLOCK END: parseDescriptionLinks v2.0 ====================
 
 function initCollapsibleDescriptions() {
     var taskDescs = document.querySelectorAll('.task-description');
@@ -4311,9 +4671,9 @@ function initCollapsibleDescriptions() {
 
 function makeCollapsible(descElement) {
     if (!descElement || descElement.classList.contains('collapsible-processed')) return;
-    var text = descElement.innerText || descElement.textContent || '';
-    if (text.length <= 300) return;
     
+    // Получаем ЧИСТЫЙ текст (без HTML) для проверки длины
+    var pureText = descElement.innerText || descElement.textContent || '';
     var descId = descElement.getAttribute('data-desc-id');
     if (!descId) {
         var parentTask = descElement.closest('[data-task-uuid]');
@@ -4330,16 +4690,40 @@ function makeCollapsible(descElement) {
         descElement.setAttribute('data-desc-id', descId);
     }
     
+    // ========== НОВАЯ ЛОГИКА ==========
+    // Проверяем по разным критериям:
+    // 1. Длина чистого текста > 300 символов
+    // 2. Количество строк > 5 (многострочный текст)
+    // 3. Количество символов > 150 И есть много переносов строк
+    var lineCount = (pureText.match(/\n/g) || []).length;
+    var isLongText = pureText.length > 300;
+    var isMultiLine = lineCount > 5;
+    var isLongMultiLine = pureText.length > 150 && lineCount > 2;
+    
+    // Если текст короткий и не многострочный - пропускаем
+    if (!isLongText && !isMultiLine && !isLongMultiLine) {
+        return;
+    }
+    
+    // Проверяем, нет ли уже кнопки
+    var existingToggle = descElement.nextElementSibling;
+    if (existingToggle && existingToggle.classList.contains('collapsible-description-toggle')) {
+        return;
+    }
+    
     descElement.classList.add('collapsible-description');
     descElement.classList.add('collapsible-processed');
+    
     var savedState = localStorage.getItem('collapsed_desc_' + descId);
     var isCollapsed = (savedState !== 'false');
     if (isCollapsed) descElement.classList.add('collapsed');
     else descElement.classList.remove('collapsed');
     
+    // Создаём кнопку
     var toggleBtn = document.createElement('button');
     toggleBtn.className = 'collapsible-description-toggle' + (isCollapsed ? ' collapsed' : '');
     toggleBtn.innerHTML = isCollapsed ? 'Развернуть описание' : 'Свернуть описание';
+    
     toggleBtn.addEventListener('click', function(e) {
         e.stopPropagation();
         var currentlyCollapsed = descElement.classList.contains('collapsed');
@@ -4358,6 +4742,7 @@ function makeCollapsible(descElement) {
             if (descElement.classList.contains('collapsed')) descElement.style.maxHeight = '';
         }, 10);
     });
+    
     descElement.parentNode.insertBefore(toggleBtn, descElement.nextSibling);
 }
 
@@ -5542,11 +5927,10 @@ function loadProjectTasks(resetPage) {
 
 
 
-// ==================== BLOCK START: renderTaskList v4.15 (with unread notifications priority) ====================
-// ver.4.14 (2026-06-11) - ПРИ ФИЛЬТРАЦИИ ПОДЗАДАЧИ ПРИНУДИТЕЛЬНО РАСКРЫВАЮТСЯ
+// ==================== BLOCK START: renderTaskList v4.16 (with Markdown support) ====================
 // ver.4.15 (2026-06-16) - ДОБАВЛЕНА ПОДСВЕТКА ЗАДАЧ С НЕПРОЧИТАННЫМИ УВЕДОМЛЕНИЯМИ
-// - Задачи с непрочитанными уведомлениями получают специальный класс и бейдж
-// - Бейдж отображается рядом с количеством сообщений
+// ver.4.16 (2026-06-17) - ДОБАВЛЕНА ПОДДЕРЖКА MARKDOWN В ОПИСАНИЯХ ЗАДАЧ
+// - Используется parseDescriptionLinks (уже содержит Markdown)
 
 function renderTaskList(tasks) {
     var container = document.getElementById('tasks-list-container');
@@ -5560,7 +5944,6 @@ function renderTaskList(tasks) {
         return;
     }
     
-    // v4.14: Проверяем, есть ли активные фильтры
     var hasActiveFilters = (currentFilterStatuses.length > 0) || 
                            (currentFilterAssigned.length > 0) || 
                            (currentSearch && currentSearch.trim() !== '');
@@ -5581,23 +5964,18 @@ function renderTaskList(tasks) {
             isOverdue = deadlineDate < Date.now();
         }
         
-        // v4.9: Определяем, является ли задача родительским контекстом
         var isParentContext = task.is_parent_context === true;
         var isCollapsedByDefault = task.is_collapsed_by_default === true;
         
-        // v4.14: Если есть активные фильтры, то подзадачи ДОЛЖНЫ быть раскрыты
-        // Также если задача сама соответствует фильтру (родительский контекст) - раскрываем
         var shouldExpand = hasActiveFilters || (isParentContext && task.has_filtered_children === true);
         
         var parentContextClass = isParentContext ? ' parent-context-task' : '';
-        // Для родительских контекстов при фильтрации НЕ сворачиваем
         var collapsedClass = (isParentContext && !hasActiveFilters && isCollapsedByDefault) ? ' collapsed-by-default' : '';
         
-        // ========== V4.15: КЛАСС ДЛЯ ЗАДАЧ С НЕПРОЧИТАННЫМИ УВЕДОМЛЕНИЯМИ ==========
         var hasUnreadNotifications = (task.unread_notifications_count && task.unread_notifications_count > 0);
         var unreadClass = hasUnreadNotifications ? ' has-unread-notifications' : '';
-        // ========== КОНЕЦ V4.15 ==========
         
+        // ========== v4.16: Описание обрабатывается через parseDescriptionLinks (с Markdown) ==========
         var descrHtml = '';
         var descrText = task.descr || '';
         var descId = 'task_' + task.uuid + '_desc';
@@ -5616,12 +5994,10 @@ function renderTaskList(tasks) {
         
         var parentContextBadge = isParentContext ? '<span class="flat-task-badge" style="background: rgba(79,124,255,0.3);">📁 Контекст фильтра</span>' : '';
         
-        // ========== V4.15: БЕЙДЖ НЕПРОЧИТАННЫХ УВЕДОМЛЕНИЙ ==========
         var unreadBadge = '';
         if (hasUnreadNotifications) {
             unreadBadge = '<span class="flat-task-badge clickable unread-badge" style="background: rgba(239,68,68,0.2); color: #f87171; cursor: pointer;" onclick="event.stopPropagation(); openTaskMessagesByUuid(\'' + task.uuid + '\')" title="Непрочитанные уведомления в задаче">🔔 ' + task.unread_notifications_count + '</span>';
         }
-        // ========== КОНЕЦ V4.15 ==========
         
         html += '<div class="flat-task-item' + parentContextClass + collapsedClass + unreadClass + '" data-task-uuid="' + task.uuid + '" data-is-parent-context="' + (isParentContext ? 'true' : 'false') + '">';
         html += '<div class="flat-task-row-link" style="display: block; text-decoration: none; color: inherit;" data-task-url="' + taskUrl + '" data-task-title="' + escapedTitle + '">';
@@ -5638,9 +6014,7 @@ function renderTaskList(tasks) {
         if (task.files_count > 0) html += '<span class="flat-task-badge">📎 ' + task.files_count + '</span>';
         if (hasSubtasks) html += '<span class="flat-task-badge clickable subtasks-toggle" data-task-uuid="' + task.uuid + '">📋 ' + task.subtasks_count + '</span>';
         if (parentContextBadge) html += parentContextBadge;
-        // ========== V4.15: ДОБАВЛЯЕМ БЕЙДЖ УВЕДОМЛЕНИЙ ==========
         if (unreadBadge) html += unreadBadge;
-        // ========== КОНЕЦ V4.15 ==========
         html += '</div>';
         html += '<div class="task-files-container" id="' + filesContainerId + '"><span class="files-loading">⏳ Загрузка файлов...</span></div>';
         html += '</div>';
@@ -5654,7 +6028,7 @@ function renderTaskList(tasks) {
         html += '<button class="btn-messages-icon" onclick="openTaskMessagesByUuid(\'' + task.uuid + '\')">💬</button>';
 
         if (task.files_count > 0) {
-            html += '<a href="<?= $appBase ?>/files.php?task=' + task.uuid + '" class="btn-secondary" style="padding:4px 8px;font-size:11px; text-decoration: none;" target="_blank" title="Все файлы задачи">📎 Файлы</a>';
+            html += '<a href="' + window.APP_BASE + '/files.php?task=' + task.uuid + '" class="btn-secondary" style="padding:4px 8px;font-size:11px; text-decoration: none;" target="_blank" title="Все файлы задачи">📎 Файлы</a>';
         }
 
         html += '</div>';
@@ -5662,7 +6036,6 @@ function renderTaskList(tasks) {
         html += '</div>';
         
         if (hasSubtasks) {
-            // v4.14: При фильтрации контейнер должен быть сразу раскрыт
             var expandedClass = shouldExpand ? ' expanded' : '';
             logDebug('[RENDER_TASK_LIST] Task ' + task.uuid + ' has ' + task.subtasks_count + ' subtasks, expanded=' + shouldExpand);
             
@@ -5681,7 +6054,6 @@ function renderTaskList(tasks) {
     
     logDebug('[RENDER_TASK_LIST] HTML inserted, container has ' + container.querySelectorAll('.subtasks-container').length + ' subtask containers');
     
-    // Остальной код без изменений...
     var rows = container.querySelectorAll('.flat-task-row');
     for (var j = 0; j < rows.length; j++) {
         var parentLink = rows[j].closest('.flat-task-row-link');
@@ -5739,7 +6111,6 @@ function renderTaskList(tasks) {
     initCollapsibleDescriptions();
     attachSubtaskToggleHandlers();
     
-    // v4.14: Если есть активные фильтры и есть контейнеры, принудительно загружаем подзадачи
     if (hasActiveFilters) {
         var containers = document.querySelectorAll('.subtasks-container');
         logDebug('[RENDER_TASK_LIST] Auto-loading subtasks for ' + containers.length + ' containers due to active filters');
@@ -5763,7 +6134,9 @@ function renderTaskList(tasks) {
 
     logDebug('[RENDER_TASK_LIST] Handlers attached, rendered ' + tasks.length + ' tasks');
 }
-// ==================== BLOCK END: renderTaskList v4.15 ====================
+// ==================== BLOCK END: renderTaskList v4.16 ====================
+
+
 
 // ==================== BLOCK START: Container Diagnostics v1.0 ====================
 // ver.1.0 (2026-06-05) - Диагностика видимости контейнеров подзадач

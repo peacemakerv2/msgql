@@ -254,6 +254,98 @@ function upload_message_files($files, &$uploaded_files_info, &$error_message = '
 }
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СООБЩЕНИЙ ====================
+
+
+// ==================== BLOCK START: parseMarkdownToHtml v2.0 (FIXED - NO DOUBLE ESCAPE) ====================
+// ver.2.0 (2026-06-17) - ИСПРАВЛЕНО ДВОЙНОЕ ЭКРАНИРОВАНИЕ
+// - НЕ экранирует весь текст целиком, только опасные части
+// - Сохраняет HTML-сущности, созданные ранее
+// - Использует экранирование только для блоков кода и ссылок
+// - Остальной текст остаётся в исходном виде (уже безопасный)
+
+function parseMarkdownToHtml($text) {
+    if (empty($text)) return '';
+    
+    log_debug("[PARSE_MARKDOWN] v2.0 Processing text length: " . strlen($text));
+    
+    // ========== ШАГ 1: НЕ ЭКРАНИРУЕМ ВЕСЬ ТЕКСТ ==========
+    // Вместо htmlspecialchars для всего текста, экранируем только опасные части
+    
+    // ========== ШАГ 2: Применяем Markdown к сырому тексту ==========
+    $processed = $text;
+    
+    // 2.1 Блоки кода: ```язык\nкод\n``` (ЭКРАНИРУЕМ ТОЛЬКО СОДЕРЖИМОЕ)
+    $processed = preg_replace_callback('/```([a-z]*)\n(.*?)\n```/s', function($matches) {
+        $lang = htmlspecialchars($matches[1], ENT_QUOTES, 'UTF-8');
+        $code = htmlspecialchars($matches[2], ENT_QUOTES, 'UTF-8');
+        $class = $lang ? ' class="language-' . $lang . '"' : '';
+        return '<pre><code' . $class . '>' . $code . '</code></pre>';
+    }, $processed);
+    
+    // 2.2 Моноширинный код: `код` (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
+    $processed = preg_replace_callback('/`([^`]+)`/', function($matches) {
+        return '<code>' . htmlspecialchars($matches[1], ENT_QUOTES, 'UTF-8') . '</code>';
+    }, $processed);
+    
+    // 2.3 Ссылки: [текст](url) (ЭКРАНИРУЕМ URL)
+    $processed = preg_replace_callback('/\[([^\]]+)\]\(([^)]+)\)/', function($matches) {
+        $linkText = $matches[1];
+        $url = $matches[2];
+        $lowerUrl = strtolower($url);
+        
+        // Блокируем опасные схемы
+        if (strpos($lowerUrl, 'javascript:') === 0 || 
+            strpos($lowerUrl, 'data:') === 0 || 
+            strpos($lowerUrl, 'vbscript:') === 0) {
+            log_debug("[PARSE_MARKDOWN] Blocked dangerous URL: " . substr($url, 0, 100));
+            return $linkText;
+        }
+        
+        // Экранируем URL и текст
+        $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $safeText = htmlspecialchars($linkText, ENT_QUOTES, 'UTF-8');
+        $targetAttr = (strpos($lowerUrl, 'mailto:') === 0 || strpos($lowerUrl, 'tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return '<a href="' . $safeUrl . '"' . $targetAttr . '>' . $safeText . '</a>';
+    }, $processed);
+    
+    // ========== ШАГ 3: Жирный, курсив, зачеркивание (БЕЗ ЭКРАНИРОВАНИЯ) ==========
+    // Текст внутри этих тегов уже безопасен, так как мы не экранировали весь текст
+    $processed = preg_replace('/\*\*(.+?)\*\*/', '<strong>$1</strong>', $processed);
+    $processed = preg_replace('/__([^_]+)__/', '<strong>$1</strong>', $processed);
+    $processed = preg_replace('/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/', '<em>$1</em>', $processed);
+    $processed = preg_replace('/_(.+?)_/', '<em>$1</em>', $processed);
+    $processed = preg_replace('/~~(.+?)~~/', '<del>$1</del>', $processed);
+    
+    // ========== ШАГ 4: Заголовки (БЕЗ ЭКРАНИРОВАНИЯ) ==========
+    $processed = preg_replace('/^### (.+)$/m', '<h3>$1</h3>', $processed);
+    $processed = preg_replace('/^## (.+)$/m', '<h2>$1</h2>', $processed);
+    $processed = preg_replace('/^# (.+)$/m', '<h1>$1</h1>', $processed);
+    
+    // Заголовки в любом месте строки
+    $processed = preg_replace('/###\s+([^\n<]+)/', '<h3>$1</h3>', $processed);
+    $processed = preg_replace('/##\s+([^\n<]+)/', '<h2>$1</h2>', $processed);
+    $processed = preg_replace('/#\s+([^\n<]+)/', '<h1>$1</h1>', $processed);
+    
+    // ========== ШАГ 5: Списки (БЕЗ ЭКРАНИРОВАНИЯ) ==========
+    $processed = preg_replace('/^- (.+)$/m', '<li>$1</li>', $processed);
+    $processed = preg_replace('/^\* (.+)$/m', '<li>$1</li>', $processed);
+    $processed = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ul>$1</ul>', $processed);
+    $processed = preg_replace('/^\d+\. (.+)$/m', '<li>$1</li>', $processed);
+    $processed = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ol>$1</ol>', $processed);
+    
+    // ========== ШАГ 6: Горизонтальные разделители и цитаты ==========
+    $processed = preg_replace('/^(---|\*\*\*)$/m', '<hr>', $processed);
+    $processed = preg_replace('/^> (.+)$/m', '<blockquote>$1</blockquote>', $processed);
+    
+    // ========== ШАГ 7: Преобразуем переносы строк в <br> ==========
+    $processed = nl2br($processed);
+    
+    log_debug("[PARSE_MARKDOWN] v2.0 Final output length: " . strlen($processed));
+    return $processed;
+}
+// ==================== BLOCK END: parseMarkdownToHtml v2.0 ====================
+
+
 function get_message_files($message_uuid) {
     $db = msgql_db();
     $files = [];
@@ -539,21 +631,98 @@ function sort_tasks_by_last_message_v2(&$taskList, $msg_info) {
 
 
 
-// ==================== BLOCK START: get_project_tasks_for_messenger v2.3 ====================
-// ver.2.3 (2026-06-02) - ИСПРАВЛЕНА СОРТИРОВКА ПОДЗАДАЧ
-// - Сначала собираем все задачи (родители и подзадачи) в плоский массив
-// - Применяем ГЛОБАЛЬНУЮ сортировку к плоскому массиву
-// - Это гарантирует, что подзадача с новым сообщением поднимется в самый верх списка проекта
+// ==================== BLOCK START: get_project_tasks_for_messenger v3.2 (FIXED) ====================
+// ver.3.2 (2026-06-16) - ИСПРАВЛЕНА ОШИБКА "Cannot redeclare function collectTasksWithHierarchy"
+// - Функция collectTasksWithHierarchy вынесена за пределы get_project_tasks_for_messenger
+// - Добавлено логирование для отладки
+
+// ==================== BLOCK START: collectTasksWithHierarchy v2.0 (FIXED HIERARCHY) ====================
+// ver.2.0 (2026-06-17) - ИСПРАВЛЕНА СОРТИРОВКА С УЧЁТОМ ИЕРАРХИИ
+// - Родительские задачи ВСЕГДА идут перед подзадачами
+// - Сортировка внутри уровня: сначала непрочитанные, потом по времени сообщений
+// - Сохранена визуальная иерархия (depth)
+
+function collectTasksWithHierarchy(&$task_list, &$result, $depth = 0) {
+    // 1. Сортируем задачи на текущем уровне
+    usort($task_list, function($a, $b) {
+        $a_has_unread = ($a['unread_count'] ?? 0) > 0;
+        $b_has_unread = ($b['unread_count'] ?? 0) > 0;
+        
+        // 1. Задачи с непрочитанными выше
+        if ($a_has_unread && !$b_has_unread) return -1;
+        if (!$a_has_unread && $b_has_unread) return 1;
+        
+        // 2. Если у обеих есть непрочитанные - по времени последнего непрочитанного
+        if ($a_has_unread && $b_has_unread) {
+            if (($a['last_unread_time'] ?? 0) != ($b['last_unread_time'] ?? 0)) {
+                return ($b['last_unread_time'] ?? 0) - ($a['last_unread_time'] ?? 0);
+            }
+        }
+        
+        // 3. Если у обеих нет непрочитанных - по времени последнего сообщения
+        $a_time = (int)($a['last_msg_time'] ?? 0);
+        $b_time = (int)($b['last_msg_time'] ?? 0);
+        
+        if ($a_time == 0 && $b_time == 0) {
+            if (($a['time'] ?? 0) != ($b['time'] ?? 0)) {
+                return ($b['time'] ?? 0) - ($a['time'] ?? 0);
+            }
+            return ($b['messages_count'] ?? 0) - ($a['messages_count'] ?? 0);
+        }
+        
+        if ($a_time == 0) return 1;
+        if ($b_time == 0) return -1;
+        
+        if ($a_time != $b_time) {
+            return $b_time - $a_time;
+        }
+        
+        if (($a['time'] ?? 0) != ($b['time'] ?? 0)) {
+            return ($b['time'] ?? 0) - ($a['time'] ?? 0);
+        }
+        
+        return ($b['messages_count'] ?? 0) - ($a['messages_count'] ?? 0);
+    });
+    
+    // 2. Добавляем задачи в результат (Родительские задачи добавляются ПЕРЕД подзадачами)
+    foreach ($task_list as &$task) {
+        // Устанавливаем глубину
+        $task['depth'] = $depth;
+        
+        // Добавляем текущую задачу в результат
+        $result[] = [
+            'uuid' => $task['uuid'],
+            'title' => $task['title'],
+            'parent_task_uuid' => $task['parent_task_uuid'] ?? null,
+            'assignee_name' => $task['assignee_name'] ?? null,
+            'messages_count' => $task['messages_count'] ?? 0,
+            'last_msg_time' => $task['last_msg_time'] ?? 0,
+            'time' => $task['time'] ?? 0,
+            'depth' => $depth,
+            'unread_count' => $task['unread_count'] ?? 0,
+            'last_unread_time' => $task['last_unread_time'] ?? 0,
+            'has_unread' => ($task['unread_count'] ?? 0) > 0
+        ];
+        
+        // 3. Рекурсивно обрабатываем подзадачи (они будут добавлены СРАЗУ после родителя)
+        if (!empty($task['subtasks'])) {
+            collectTasksWithHierarchy($task['subtasks'], $result, $depth + 1);
+        }
+    }
+    unset($task);
+}
+// ==================== BLOCK END: collectTasksWithHierarchy v2.0 ====================
+
 function get_project_tasks_for_messenger($project_uuid) {
     $db = msgql_db();
     $cu = msgql_current_user_uuid();
     $tasks = msgql_get_accessible_tasks($cu, $project_uuid);
-    log_debug("[GET_TASKS_v2.3] Getting tasks for project: {$project_uuid}");
+    log_debug("[GET_TASKS_v3.2] Getting tasks for project: {$project_uuid}");
     
+    // ========== 1. Получаем информацию о сообщениях для всех задач ==========
     $msg_info = [];
     $task_uuids = [];
     
-    // 1. Собираем все UUID задач (включая подзадачи)
     $collect_uuids = function($task_list) use (&$task_uuids, &$collect_uuids) {
         foreach ($task_list as $t) {
             $task_uuids[] = $t['uuid'];
@@ -564,87 +733,101 @@ function get_project_tasks_for_messenger($project_uuid) {
     };
     $collect_uuids($tasks);
     
-    // 2. Получаем информацию о сообщениях для всех собранных UUID
     if (!empty($task_uuids)) {
         $placeholders = implode(',', array_fill(0, count($task_uuids), '?'));
         $stmt = $db->prepare("
-            SELECT task_uuid, COUNT(*) as cnt, MAX(time) as last_msg_time
+            SELECT 
+                task_uuid, 
+                COUNT(*) as cnt, 
+                MAX(time) as last_msg_time,
+                SUM(CASE WHEN is_read = 0 AND user_uuid != ? THEN 1 ELSE 0 END) as unread_count,
+                MAX(CASE WHEN is_read = 0 AND user_uuid != ? THEN time ELSE NULL END) as last_unread_time
             FROM messages
             WHERE task_uuid IN ($placeholders)
             GROUP BY task_uuid
         ");
-        $types = str_repeat('s', count($task_uuids));
-        $stmt->bind_param($types, ...$task_uuids);
+        $types = str_repeat('s', count($task_uuids) + 2);
+        $params = array_merge([$cu, $cu], $task_uuids);
+        $stmt->bind_param($types, ...$params);
         $stmt->execute();
         $result = $stmt->get_result();
         while ($row = $result->fetch_assoc()) {
             $msg_info[$row['task_uuid']] = [
                 'cnt' => (int)$row['cnt'],
-                'last_msg_time' => (int)($row['last_msg_time'] ?? 0)
+                'last_msg_time' => (int)($row['last_msg_time'] ?? 0),
+                'unread_count' => (int)($row['unread_count'] ?? 0),
+                'last_unread_time' => (int)($row['last_unread_time'] ?? 0)
             ];
         }
         $stmt->close();
+        log_debug("[GET_TASKS_v3.2] Found " . count($msg_info) . " tasks with messages");
     }
     
-    log_debug("[GET_TASKS_v2.3] Found " . count($msg_info) . " tasks with messages out of " . count($task_uuids) . " total tasks");
-    
-    // 3. Собираем плоский список всех задач
-    $flat = [];
-    $walk = function($list) use (&$walk, &$flat, $msg_info) {
+    // ========== 2. Строим дерево задач с глубиной ==========
+    // Сначала создаем карту всех задач с их данными
+    $task_map = [];
+    $walk_map = function($list, $current_depth) use (&$walk_map, &$task_map, $msg_info) {
         foreach ($list as $t) {
-            $flat[] = [
+            if (!msgql_can_access_task(msgql_current_user_uuid(), $t['uuid'], 'view')) {
+                continue;
+            }
+            
+            $unread_count = $msg_info[$t['uuid']]['unread_count'] ?? 0;
+            $last_unread_time = $msg_info[$t['uuid']]['last_unread_time'] ?? 0;
+            $last_msg_time = $msg_info[$t['uuid']]['last_msg_time'] ?? 0;
+            $messages_count = $msg_info[$t['uuid']]['cnt'] ?? 0;
+            
+            $task_map[$t['uuid']] = [
                 'uuid' => $t['uuid'],
                 'title' => $t['title'],
                 'parent_task_uuid' => $t['parent_task_uuid'] ?? null,
                 'assignee_name' => $t['assignee_name'] ?? null,
-                'messages_count' => $msg_info[$t['uuid']]['cnt'] ?? 0,
-                'last_msg_time' => $msg_info[$t['uuid']]['last_msg_time'] ?? 0,
-                'time' => (int)($t['time'] ?? 0)
+                'messages_count' => $messages_count,
+                'last_msg_time' => $last_msg_time,
+                'time' => (int)($t['time'] ?? 0),
+                'depth' => $current_depth,
+                'unread_count' => $unread_count,
+                'last_unread_time' => $last_unread_time,
+                'has_unread' => $unread_count > 0,
+                'subtasks' => []
             ];
+            
             if (!empty($t['subtasks'])) {
-                $walk($t['subtasks']);
+                $walk_map($t['subtasks'], $current_depth + 1);
             }
         }
     };
-    $walk($tasks);
+    $walk_map($tasks, 0);
     
-    // 4. ГЛОБАЛЬНАЯ СОРТИРОВКА плоского списка
-    usort($flat, function($a, $b) {
-        $a_time = (int)($a['last_msg_time'] ?? 0);
-        $b_time = (int)($b['last_msg_time'] ?? 0);
-        $a_cnt = (int)($a['messages_count'] ?? 0);
-        $b_cnt = (int)($b['messages_count'] ?? 0);
-
-        // 1. Если у обеих задач нет сообщений, сортируем по времени создания (новые сверху)
-        if ($a_time == 0 && $b_time == 0) {
-            if ($a['time'] != $b['time']) {
-                return $b['time'] - $a['time'];
+    // Строим дерево: связываем подзадачи с родителями
+    $tree = [];
+    foreach ($task_map as $uuid => &$task) {
+        if (empty($task['parent_task_uuid']) || !isset($task_map[$task['parent_task_uuid']])) {
+            // Корневая задача
+            $tree[] = &$task;
+        } else {
+            // Подзадача - добавляем к родителю
+            if (!isset($task_map[$task['parent_task_uuid']]['subtasks'])) {
+                $task_map[$task['parent_task_uuid']]['subtasks'] = [];
             }
-            return $b_cnt - $a_cnt;
+            $task_map[$task['parent_task_uuid']]['subtasks'][] = &$task;
         }
-        
-        // 2. Задачи с сообщениями ВСЕГДА выше, чем задачи без сообщений
-        if ($a_time == 0) return 1;
-        if ($b_time == 0) return -1;
-        
-        // 3. Сортировка по убыванию времени последнего сообщения (новые сверху)
-        if ($a_time != $b_time) {
-            return $b_time - $a_time;
-        }
-        
-        // 4. При одинаковом времени последнего сообщения - по времени создания задачи
-        if ($a['time'] != $b['time']) {
-            return $b['time'] - $a['time'];
-        }
-        
-        // 5. Если всё совпадает, по количеству сообщений
-        return $b_cnt - $a_cnt;
-    });
+    }
+    unset($task);
     
-    log_debug("[GET_TASKS_v2.3] Returned " . count($flat) . " flattened and globally sorted tasks for project {$project_uuid}");
-    return $flat;
+    log_debug("[GET_TASKS_v3.2] Built tree with " . count($tree) . " root tasks");
+    
+    // ========== 3. Собираем плоский список с правильной иерархией ==========
+    $flat_result = [];
+    collectTasksWithHierarchy($tree, $flat_result);
+    
+    log_debug("[GET_TASKS_v3.2] Final sorted tasks count: " . count($flat_result));
+    
+    return $flat_result;
 }
-// ==================== BLOCK END: get_project_tasks_for_messenger v2.3 ====================
+// ==================== BLOCK END: get_project_tasks_for_messenger v3.2 ====================
+
+
 
 // ==================== BLOCK START: get_latest_task_with_unread v2.0 ====================
 // ver.1.0 (2026-06-11) - Функция для получения последней задачи с непрочитанными сообщениями
@@ -2236,6 +2419,12 @@ if ($selected_task_uuid && $selected_project_uuid) {
 
 log_debug("[INIT_TASK] ========== END TASK SELECTION ==========");
 // ==================== BLOCK END: Task selection with unread priority v2.0 ====================
+
+
+
+
+
+
 
 $lastMessageTime = 0;
 if (!empty($selected_task_uuid)) {
@@ -4244,13 +4433,17 @@ setTimeout(requestNotificationPermission, 5000);
 <!-- Для краткости я их не дублирую, но в итоговом файле они должны быть полностью -->
 
 <script nonce="<?= CSP_NONCE ?>">
-// ==================== BLOCK START: parseMessageText v8.25 (restored quotes and links) ====================
-// ver.8.25 - Добавлено преобразование \n в <br>
+// ==================== BLOCK START: parseMessageText v12.0 (EXTERNAL LINKS BEFORE MARKDOWN) ====================
+// ver.12.0 (2026-06-19) - ИСПРАВЛЕНИЕ: ВНЕШНИЕ ССЫЛКИ ОБРАБАТЫВАЮТСЯ ДО MARKDOWN
+// - Это предотвращает интерпретацию символов _ и * в URL как Markdown-разметки
+// - Ссылки теперь полностью сохраняются, включая параметры после ?
+// - Сохранена вся предыдущая функциональность: умные ссылки, Markdown, цитаты
+
 function parseMessageText(text) {
     if (!text) return '';
     
-    // Сначала преобразуем \n в <br> (для правильного отображения переносов строк)
-    var withBreaks = text.replace(/\n/g, '<br>');
+    // НЕ ЭКРАНИРУЕМ ВЕСЬ ТЕКСТ!
+    // Работаем с сырым текстом
     
     var currentHost = window.location.host;
     var appBase = window.APP_BASE || '';
@@ -4259,6 +4452,14 @@ function parseMessageText(text) {
     var UUID_REGEX = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
     var protocol = window.location.protocol;
     var baseUrl = protocol + '//' + currentHost + appBase;
+    
+    // Вспомогательная функция для экранирования ТОЛЬКО опасных частей
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
     
     function safeLink(protocol, uuid, type, displayText) {
         if (!UUID_REGEX.test(uuid)) return '[неверный идентификатор]';
@@ -4277,6 +4478,15 @@ function parseMessageText(text) {
     
     function makeSafeExternalLink(url) {
         var lowerUrl = url.toLowerCase();
+        
+        // Блокируем опасные схемы
+        if (lowerUrl.indexOf('javascript:') === 0 || 
+            lowerUrl.indexOf('data:') === 0 || 
+            lowerUrl.indexOf('vbscript:') === 0) {
+            return escapeHtml(url);
+        }
+        
+        // Разрешенные протоколы
         var safeProtocols = ['http://', 'https://', 'tg://', 'telegram://', 'mailto:', 'tel:', 'ftp://', 'ws://', 'wss://', 'magnet:', 'skype:', 'viber:', 'whatsapp:', 'signal:'];
         var isSafe = false;
         for (var i = 0; i < safeProtocols.length; i++) {
@@ -4285,28 +4495,35 @@ function parseMessageText(text) {
                 break;
             }
         }
-        if (isSafe) {
-            var cleanUrl = url.replace(/javascript:/gi, '').replace(/data:/gi, '').replace(/vbscript:/gi, '');
-            var encodedUrl = encodeURI(cleanUrl);
-            var linkClass = (lowerUrl.startsWith('tg://') || lowerUrl.startsWith('telegram://')) ? 'external-link telegram-link' : 'external-link';
-            var targetAttr = (lowerUrl.startsWith('mailto:') || lowerUrl.startsWith('tel:')) ? '' : ' target="_blank" rel="noopener noreferrer"';
-            return '<a href="' + encodedUrl + '" class="' + linkClass + '"' + targetAttr + '>' + escapeHtml(url) + '</a>';
+        
+        if (!isSafe) {
+            return escapeHtml(url);
         }
-        return escapeHtml(url);
+        
+        // Очищаем от опасных инъекций
+        var cleanUrl = url.replace(/javascript:/gi, '').replace(/data:/gi, '').replace(/vbscript:/gi, '');
+        
+        // Экранируем URL как текст, а затем вставляем в href
+        var safeUrl = cleanUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        
+        var isTelegram = lowerUrl.indexOf('tg://') === 0 || lowerUrl.indexOf('telegram://') === 0;
+        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
+        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        
+        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + escapeHtml(url) + '</a>';
     }
     
-    function escapeHtml(str) {
-        if (!str) return '';
-        var div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
+    // ========== ШАГ 1: ОБРАБОТКА ВНЕШНИХ ССЫЛОК (ДО MARKDOWN) ==========
+    // Это предотвращает интерпретацию символов _ и * в URL как Markdown
+    var escapedText = text;
+    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/gi;
+    escapedText = escapedText.replace(urlRegex, function(match) {
+        if (match.indexOf('<a') !== -1) return match;
+        if (match.indexOf(currentHost) !== -1 && (match.indexOf('http://') === 0 || match.indexOf('https://') === 0)) return match;
+        return makeSafeExternalLink(match);
+    });
     
-    // Экранируем HTML, но с сохранением <br>
-    var escapedText = escapeHtml(withBreaks);
-    
-    // Восстанавливаем <br> обратно (он был заэкранирован как &lt;br&gt;)
-    escapedText = escapedText.replace(/&lt;br&gt;/g, '<br>');
+    // ========== ШАГ 2: УМНЫЕ ССЫЛКИ ==========
     
     // Маркеры [msg:uuid], [task:uuid], [file:uuid]
     escapedText = escapedText.replace(/\[msg:([a-f0-9\-]{36})\]/gi, function(match, uuid) {
@@ -4320,21 +4537,18 @@ function parseMessageText(text) {
     });
     
     // ========== ПРОЕКТЫ ==========
-    // с http/https и APP_BASE
     escapedText = escapedText.replace(
         new RegExp('https?://' + escapedHost + escapedAppBase + '/projects\\.php\\?(?:task|uuid|id)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
             return safeLink('https', uuid, 'task', '📋 задача');
         }
     );
-    // относительные с APP_BASE
     escapedText = escapedText.replace(
         new RegExp(escapedAppBase + '/projects\\.php\\?(?:task|uuid|id)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
             return safeLink('https', uuid, 'task', '📋 задача');
         }
     );
-    // без APP_BASE (если appBase пустой или ссылка без него)
     escapedText = escapedText.replace(
         new RegExp('https?://' + escapedHost + '/projects\\.php\\?(?:task|uuid|id)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
@@ -4343,21 +4557,18 @@ function parseMessageText(text) {
     );
     
     // ========== СООБЩЕНИЯ ==========
-    // с http/https и APP_BASE
     escapedText = escapedText.replace(
         new RegExp('https?://' + escapedHost + escapedAppBase + '/messages\\.php\\?(?:message|msg)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
             return safeLink('https', uuid, 'msg', '💬 сообщение');
         }
     );
-    // относительные с APP_BASE
     escapedText = escapedText.replace(
         new RegExp(escapedAppBase + '/messages\\.php\\?(?:message|msg)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
             return safeLink('https', uuid, 'msg', '💬 сообщение');
         }
     );
-    // без APP_BASE
     escapedText = escapedText.replace(
         new RegExp('https?://' + escapedHost + '/messages\\.php\\?(?:message|msg)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
@@ -4365,36 +4576,25 @@ function parseMessageText(text) {
         }
     );
     
-    // ========== ФАЙЛЫ (file_preview.php и download.php) ==========
-    // с http/https и APP_BASE
+    // ========== ФАЙЛЫ ==========
     escapedText = escapedText.replace(
         new RegExp('https?://' + escapedHost + escapedAppBase + '/(?:file_preview|download)\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
             return safeLink('https', uuid, 'file', '📎 файл');
         }
     );
-    // относительные с APP_BASE
     escapedText = escapedText.replace(
         new RegExp(escapedAppBase + '/(?:file_preview|download)\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
             return safeLink('https', uuid, 'file', '📎 файл');
         }
     );
-    // без APP_BASE (вариант 1: /file_preview.php)
     escapedText = escapedText.replace(
         new RegExp('https?://' + escapedHost + '/file_preview\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
             return safeLink('https', uuid, 'file', '📎 файл');
         }
     );
-    // без APP_BASE (вариант 2: без слеша после домена - https://site.comfile_preview.php)
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + 'file_preview\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'file', '📎 файл');
-        }
-    );
-    // без APP_BASE (download.php)
     escapedText = escapedText.replace(
         new RegExp('https?://' + escapedHost + '/download\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
         function(match, uuid) {
@@ -4402,17 +4602,78 @@ function parseMessageText(text) {
         }
     );
     
-    // ========== ВНЕШНИЕ ССЫЛКИ ==========
-    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
-    escapedText = escapedText.replace(urlRegex, function(match) {
-        if (match.indexOf('<a') !== -1) return match;
-        if (match.indexOf(currentHost) !== -1 && (match.indexOf('http://') === 0 || match.indexOf('https://') === 0)) return match;
-        return makeSafeExternalLink(match);
+    // ========== ШАГ 3: ПРИМЕНЯЕМ MARKDOWN ==========
+    logDebug('[MARKDOWN] Processing text length: ' + escapedText.length);
+    
+    // 3.1 Жирный текст: **текст** и __текст__
+    escapedText = escapedText.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    escapedText = escapedText.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    
+    // 3.2 Курсив: *текст* и _текст_ (с защитой от пересечения с жирным)
+    escapedText = escapedText.replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>');
+    escapedText = escapedText.replace(/_(.+?)_/g, '<em>$1</em>');
+    
+    // 3.3 Зачеркивание: ~~текст~~
+    escapedText = escapedText.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    
+    // 3.4 Моноширинный код: `код` (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
+    escapedText = escapedText.replace(/`([^`]+)`/g, function(match, code) {
+        return '<code>' + escapeHtml(code) + '</code>';
     });
     
+    // 3.5 Блоки кода: ```язык\nкод\n``` (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
+    escapedText = escapedText.replace(/```([a-z]*)\n(.*?)\n```/gs, function(match, lang, code) {
+        var langAttr = lang ? ' class="language-' + lang + '"' : '';
+        var safeCode = escapeHtml(code);
+        return '<pre><code' + langAttr + '>' + safeCode + '</code></pre>';
+    });
+    
+    // 3.6 Заголовки (в начале строки)
+    escapedText = escapedText.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    escapedText = escapedText.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    escapedText = escapedText.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    
+    // 3.7 Заголовки в любом месте строки
+    escapedText = escapedText.replace(/###\s+([^\n<]+)/g, '<h3>$1</h3>');
+    escapedText = escapedText.replace(/##\s+([^\n<]+)/g, '<h2>$1</h2>');
+    escapedText = escapedText.replace(/#\s+([^\n<]+)/g, '<h1>$1</h1>');
+    
+    // 3.8 Маркированные списки: - пункт, * пункт
+    escapedText = escapedText.replace(/^- (.+)$/gm, '<li>$1</li>');
+    escapedText = escapedText.replace(/^\* (.+)$/gm, '<li>$1</li>');
+    // Обернуть последовательные <li> в <ul>
+    escapedText = escapedText.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
+    
+    // 3.9 Нумерованные списки: 1. пункт
+    escapedText = escapedText.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+    escapedText = escapedText.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ol>$1</ol>');
+    
+    // 3.10 Горизонтальные разделители: --- или ***
+    escapedText = escapedText.replace(/^(---|\*\*\*)$/gm, '<hr>');
+    
+    // 3.11 Цитаты: > текст
+    escapedText = escapedText.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+    
+    // 3.12 Ссылки: [текст](url) (ЭКРАНИРУЕМ URL)
+    escapedText = escapedText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, linkText, url) {
+        var lowerUrl = url.toLowerCase();
+        // Блокируем опасные схемы
+        if (lowerUrl.indexOf('javascript:') === 0 || 
+            lowerUrl.indexOf('data:') === 0 || 
+            lowerUrl.indexOf('vbscript:') === 0) {
+            logDebug('[MARKDOWN] Blocked dangerous URL: ' + url.substring(0, 100));
+            return linkText;
+        }
+        var safeUrl = escapeHtml(url);
+        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return '<a href="' + safeUrl + '"' + targetAttr + '>' + linkText + '</a>';
+    });
+    
+    logDebug('[MARKDOWN] Applied Markdown formatting');
+    
     // ========== ФОРМАТИРОВАНИЕ ЦИТАТ ==========
-    // Разбиваем по <br> для обработки цитат
-    var lines = escapedText.split('<br>');
+    // Разбиваем по \n (НЕ экранируем)
+    var lines = escapedText.split('\n');
     var quoteLines = [];
     var resultLines = [];
     var inQuote = false;
@@ -4420,11 +4681,10 @@ function parseMessageText(text) {
     
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
-        // Обработка цитат: &gt; (экранированный >) или просто >
-        if (line.match(/^&gt;\s/) || line.match(/^>\s/) || line.match(/^»\s/)) {
+        // Обработка цитат: > текст
+        if (line.match(/^>\s/) || line.match(/^»\s/)) {
             var content = '';
-            if (line.match(/^&gt;\s/)) content = line.substring(5);
-            else if (line.match(/^>\s/)) content = line.substring(2);
+            if (line.match(/^>\s/)) content = line.substring(2);
             else if (line.match(/^»\s/)) content = line.substring(2);
             
             content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -4459,7 +4719,7 @@ function parseMessageText(text) {
     // Соединяем обратно с <br>
     return resultLines.join('<br>');
 }
-// ==================== BLOCK END: parseMessageText v8.36 (with line breaks) ====================
+// ==================== BLOCK END: parseMessageText v12.0 ====================
 </script>
 
 <script nonce="<?= CSP_NONCE ?>">
@@ -4493,11 +4753,81 @@ function formatFileSize(b){return b>=1e9?(b/1e9).toFixed(2)+' GB':b>=1e6?(b/1e6)
 
 function getFileIcon(n){var e=n.split('.').pop().toLowerCase();return{jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',webp:'🖼️',pdf:'📄',doc:'📝',docx:'📝',xls:'📊',xlsx:'📊',zip:'📦',rar:'📦','7z':'📦',mp3:'🎵',mp4:'🎬',avi:'🎬',txt:'📃'}[e]||'📎'}
 
+
+// ==================== BLOCK START: renderTaskItem v2.0 (чистые имена, буллеты только для отображения) ====================
+// ver.2.0 (2026-06-17) - ИСПРАВЛЕНИЕ: НЕ МЕНЯЕТ task.title, буллеты только для отображения
+// - Использует task.title как есть (чистое имя из БД)
+// - Добавляет визуальный буллет на основе depth
+// - НЕ сохраняет буллеты в БД
+
+function renderTaskItem(task, isActive) {
+    var depth = task.depth || 0;
+    var indentSize = 20;
+    var indentPx = depth * indentSize;
+    
+    // Генерируем буллет ТОЛЬКО ДЛЯ ОТОБРАЖЕНИЯ
+    var bullet = '';
+    if (depth === 0) {
+        bullet = '';
+    } else if (depth === 1) {
+        bullet = '└─ ';
+    } else {
+        bullet = '• ';
+    }
+    
+    var bulletPadding = depth > 0 ? 4 : 0;
+    var totalIndent = indentPx + bulletPadding;
+    
+    logDebug('[RENDER_TASK] depth=' + depth + ', bullet="' + bullet + '", title="' + task.title + '"');
+    
+    var activeClass = isActive ? 'active' : '';
+    var countHtml = (task.messages_count > 0) 
+        ? '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + task.messages_count + ']</span>' 
+        : '';
+    
+    var unreadBadge = '';
+    if (task.unread_count > 0) {
+        unreadBadge = '<span style="font-size:10px;background:#f07070;color:white;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:bold;">' + task.unread_count + ' нов.</span>';
+    }
+    
+    var assigneeHtml = task.assignee_name 
+        ? '<div class="task-assignee">👤 ' + escapeHtml(task.assignee_name) + '</div>' 
+        : '';
+    
+    var style = 'padding-left: ' + (48 + totalIndent) + 'px;';
+    if (depth > 0) {
+        style += ' border-left: 2px solid rgba(79,124,255,0.2);';
+        style += ' margin-left: ' + (totalIndent) + 'px;';
+    }
+    
+    // ========== ИСПОЛЬЗУЕМ ЧИСТОЕ ИМЯ ИЗ task.title ==========
+    // Никаких изменений названия, только экранирование
+    var titleHtml = escapeHtml(task.title) + ' ' + countHtml + ' ' + unreadBadge;
+    
+    // Добавляем буллет ТОЛЬКО ДЛЯ ОТОБРАЖЕНИЯ (не меняет task.title)
+    if (bullet) {
+        titleHtml = '<span style="color:#6b7280;font-weight:normal;">' + bullet + '</span> ' + titleHtml;
+    }
+    
+    return '<div class="task-item ' + activeClass + '" data-task-uuid="' + task.uuid + '" data-depth="' + depth + '" style="' + style + '">' +
+        '<div class="task-title">' + titleHtml + '</div>' +
+        assigneeHtml +
+    '</div>';
+}
+// ==================== BLOCK END: renderTaskItem v2.0 ====================
+
+
+// ==================== BLOCK START: renderMessage v9.0 (with Markdown support) ====================
+// ver.8.34 - Базовая версия с чистым текстом для копирования
+// ver.9.0 (2026-06-17) - ДОБАВЛЕНА ПОДДЕРЖКА MARKDOWN
+// - Текст сообщения теперь обрабатывается через parseMessageText (с Markdown)
+
 function renderMessage(msg) {
     var own = msg.user_uuid === window.currentUserUuid;
     var init = msg.user_name ? msg.user_name.charAt(0).toUpperCase() : 'U';
     var unread = (msg.is_read === 0 && !own) ? 'unread' : '';
     
+    // ========== v9.0: Текст обрабатывается через parseMessageText (с Markdown) ==========
     var processedText = parseMessageText(msg.text || '');
     
     // ЧИСТЫЙ ТЕКСТ для копирования (из базы, без обработки, без цитат)
@@ -4523,7 +4853,6 @@ function renderMessage(msg) {
             var f = msg.files[fi];
             var safeName = (f.name || 'Файл').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
             var safeMime = (f.mime || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
-            // Для data-message-text используем encodeURIComponent
             var msgTextForAttr = encodeURIComponent(pureText);
             
             if (f.mime && f.mime.startsWith('image/')) {
@@ -4543,7 +4872,6 @@ function renderMessage(msg) {
         fHtml += '</div>';
     }
     
-    // Для data-text и data-original-text тоже используем encodeURIComponent
     var dataTextForAttr = encodeURIComponent(pureText);
     var replyAttr = (msg.reply_to && msg.reply_to.uuid) ? ' data-reply-uuid="' + msg.reply_to.uuid + '"' : '';
     
@@ -4559,7 +4887,7 @@ function renderMessage(msg) {
         '</div>' +
     '</div>';
 }
-// ==================== BLOCK END: renderMessage and helpers v8.34 ====================
+// ==================== BLOCK END: renderMessage v9.0 ====================
 
 
 
@@ -5486,51 +5814,61 @@ function refreshSidebarForProject(projectUuid, callback) {
     xhr.send(formData);
 }
 
+// ==================== BLOCK START: updateSidebarTasks v3.0 ====================
+// ver.3.0 (2026-06-16) - ИСПОЛЬЗОВАНИЕ renderTaskItem ДЛЯ ИЕРАРХИИ
+// - Использует renderTaskItem для рендеринга каждой задачи
+// - Сохраняет data-depth атрибут для CSS-стилей
+// - Обновляет как десктопный, так и мобильный сайдбар
+// - Добавлено логирование
+
 function updateSidebarTasks(projectUuid, tasks) {
-    logDebug('[SIDEBAR_REFRESH_v8.37] updateSidebarTasks called for project:', projectUuid, 'tasks count:', tasks.length);
+    logDebug('[SIDEBAR_REFRESH_v3.0] updateSidebarTasks called for project:', projectUuid, 'tasks count:', tasks.length);
     
     var projectElement = document.querySelector('.project-item[data-project-uuid="' + projectUuid + '"]');
     if (!projectElement) {
-        logDebug('[SIDEBAR_REFRESH_v8.37] Project element not found:', projectUuid);
+        logDebug('[SIDEBAR_REFRESH_v3.0] Project element not found:', projectUuid);
         return;
     }
     
     var tasksList = projectElement.querySelector('.tasks-list');
     if (!tasksList) {
-        logDebug('[SIDEBAR_REFRESH_v8.37] Tasks list not found for project:', projectUuid);
+        logDebug('[SIDEBAR_REFRESH_v3.0] Tasks list not found for project:', projectUuid);
         return;
     }
     
-    // ========== ИСПРАВЛЕНИЕ: Удаляем ВСЕ существующие счётчики перед обновлением ==========
-    var existingSpans = tasksList.querySelectorAll('.task-title span');
-    existingSpans.forEach(function(span) {
-        span.remove();
-    });
-    // ====================================================================================
-    
     // Сохраняем активную задачу
     var activeTaskUuid = window.currentTaskUuid;
-    logDebug('[SIDEBAR_REFRESH_v8.37] Active task UUID:', activeTaskUuid);
+    logDebug('[SIDEBAR_REFRESH_v3.0] Active task UUID:', activeTaskUuid);
     
-    // Перестраиваем список задач
+    // Перестраиваем список задач с использованием renderTaskItem
     var newHtml = '';
     for (var i = 0; i < tasks.length; i++) {
         var task = tasks[i];
-        var activeClass = (task.uuid === activeTaskUuid) ? 'active' : '';
-        var countHtml = (task.messages_count > 0) ? '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + task.messages_count + ']</span>' : '';
-        var assigneeHtml = task.assignee_name ? '<div class="task-assignee">👤 ' + escapeHtml(task.assignee_name) + '</div>' : '';
-        
-        newHtml += '<div class="task-item ' + activeClass + '" data-task-uuid="' + task.uuid + '">';
-        newHtml += '<div class="task-title">' + escapeHtml(task.title) + ' ' + countHtml + '</div>';
-        newHtml += assigneeHtml;
-        newHtml += '</div>';
+        var isActive = (task.uuid === activeTaskUuid);
+        // Используем renderTaskItem для рендеринга с иерархией
+        if (typeof renderTaskItem === 'function') {
+            newHtml += renderTaskItem(task, isActive);
+        } else {
+            // Fallback, если функция не определена
+            var activeClass = isActive ? 'active' : '';
+            var countHtml = (task.messages_count > 0) 
+                ? '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + task.messages_count + ']</span>' 
+                : '';
+            var assigneeHtml = task.assignee_name 
+                ? '<div class="task-assignee">👤 ' + escapeHtml(task.assignee_name) + '</div>' 
+                : '';
+            newHtml += '<div class="task-item ' + activeClass + '" data-task-uuid="' + task.uuid + '">';
+            newHtml += '<div class="task-title">' + escapeHtml(task.title) + ' ' + countHtml + '</div>';
+            newHtml += assigneeHtml;
+            newHtml += '</div>';
+        }
     }
     
     tasksList.innerHTML = newHtml;
     
     // Переназначаем обработчики кликов
     var newTaskItems = tasksList.querySelectorAll('.task-item');
-    logDebug('[SIDEBAR_REFRESH_v8.37] Reattaching click handlers to ' + newTaskItems.length + ' task items');
+    logDebug('[SIDEBAR_REFRESH_v3.0] Reattaching click handlers to ' + newTaskItems.length + ' task items');
     
     newTaskItems.forEach(function(taskItem) {
         taskItem.addEventListener('click', function(e) {
@@ -5550,43 +5888,50 @@ function updateSidebarTasks(projectUuid, tasks) {
     // Обновляем мобильный сайдбар, если он существует
     updateMobileSidebarTasks(projectUuid, tasks);
     
-    logDebug('[SIDEBAR_REFRESH_v8.37] Sidebar updated for project:', projectUuid, 'tasks:', tasks.length);
+    logDebug('[SIDEBAR_REFRESH_v3.0] Sidebar updated for project:', projectUuid, 'tasks:', tasks.length);
 }
+// ==================== BLOCK END: updateSidebarTasks v3.0 ====================
 
+
+// ==================== BLOCK START: updateMobileSidebarTasks v3.0 ====================
+// ver.3.0 (2026-06-16) - ИСПОЛЬЗОВАНИЕ renderTaskItem ДЛЯ ИЕРАРХИИ
+// - Синхронизирован с десктопной версией
+// - Использует renderTaskItem для единообразного отображения
 
 function updateMobileSidebarTasks(projectUuid, tasks) {
     var mobileProjectElement = document.querySelector('#mobile-drawer-panel .project-item[data-project-uuid="' + projectUuid + '"]');
     if (!mobileProjectElement) {
-        logDebug('[SIDEBAR_REFRESH_v8.37] Mobile project element not found:', projectUuid);
+        logDebug('[SIDEBAR_REFRESH_v3.0] Mobile project element not found:', projectUuid);
         return;
     }
     
     var mobileTasksList = mobileProjectElement.querySelector('.tasks-list');
     if (!mobileTasksList) {
-        logDebug('[SIDEBAR_REFRESH_v8.37] Mobile tasks list not found');
+        logDebug('[SIDEBAR_REFRESH_v3.0] Mobile tasks list not found');
         return;
     }
-    
-    // ========== ИСПРАВЛЕНИЕ: Удаляем ВСЕ существующие счётчики перед обновлением ==========
-    var existingSpans = mobileTasksList.querySelectorAll('.task-title span');
-    existingSpans.forEach(function(span) {
-        span.remove();
-    });
-    // ====================================================================================
     
     var activeTaskUuid = window.currentTaskUuid;
     
     var newHtml = '';
     for (var i = 0; i < tasks.length; i++) {
         var task = tasks[i];
-        var activeClass = (task.uuid === activeTaskUuid) ? 'active' : '';
-        var countHtml = (task.messages_count > 0) ? '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + task.messages_count + ']</span>' : '';
-        var assigneeHtml = task.assignee_name ? '<div class="task-assignee">👤 ' + escapeHtml(task.assignee_name) + '</div>' : '';
-        
-        newHtml += '<div class="task-item ' + activeClass + '" data-task-uuid="' + task.uuid + '">';
-        newHtml += '<div class="task-title">' + escapeHtml(task.title) + ' ' + countHtml + '</div>';
-        newHtml += assigneeHtml;
-        newHtml += '</div>';
+        var isActive = (task.uuid === activeTaskUuid);
+        if (typeof renderTaskItem === 'function') {
+            newHtml += renderTaskItem(task, isActive);
+        } else {
+            var activeClass = isActive ? 'active' : '';
+            var countHtml = (task.messages_count > 0) 
+                ? '<span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[' + task.messages_count + ']</span>' 
+                : '';
+            var assigneeHtml = task.assignee_name 
+                ? '<div class="task-assignee">👤 ' + escapeHtml(task.assignee_name) + '</div>' 
+                : '';
+            newHtml += '<div class="task-item ' + activeClass + '" data-task-uuid="' + task.uuid + '">';
+            newHtml += '<div class="task-title">' + escapeHtml(task.title) + ' ' + countHtml + '</div>';
+            newHtml += assigneeHtml;
+            newHtml += '</div>';
+        }
     }
     
     mobileTasksList.innerHTML = newHtml;
@@ -5603,8 +5948,9 @@ function updateMobileSidebarTasks(projectUuid, tasks) {
         });
     });
     
-    logDebug('[SIDEBAR_REFRESH_v8.37] Mobile sidebar updated for project:', projectUuid);
+    logDebug('[SIDEBAR_REFRESH_v3.0] Mobile sidebar updated for project:', projectUuid);
 }
+// ==================== BLOCK END: updateMobileSidebarTasks v3.0 ====================
 
 function getCurrentProjectUuid() {
     var activeTask = document.querySelector('.task-item.active');
@@ -9777,12 +10123,48 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="project-count"><?= count($tasks_by_project[$project['uuid']] ?? []) ?></span>
                 </div>
                 <div class="tasks-list" <?= $selected_project_uuid === $project['uuid'] ? 'style="display:block;"' : '' ?>>
-                    <?php foreach (($tasks_by_project[$project['uuid']] ?? []) as $task): ?>
-                    <div class="task-item <?= $selected_task_uuid === $task['uuid'] ? 'active' : '' ?>" data-task-uuid="<?= htmlspecialchars($task['uuid']) ?>">
-                        <div class="task-title"><?= htmlspecialchars($task['title']) ?> <?php if (($task['messages_count'] ?? 0) > 0): ?><span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[<?= $task['messages_count'] ?>]</span><?php endif; ?></div>
-                        <?php if ($task['assignee_name']): ?><div class="task-assignee">👤 <?= htmlspecialchars($task['assignee_name']) ?></div><?php endif; ?>
+                    <!-- ==================== BLOCK START: Mobile sidebar tasks with hierarchy v3.0 ==================== -->
+                    <?php foreach (($tasks_by_project[$project['uuid']] ?? []) as $task): 
+                        $depth = $task['depth'] ?? 0;
+                        $indentPx = $depth * 20;
+                        $bullet = '';
+                        if ($depth === 0) {
+                            $bullet = '';
+                        } elseif ($depth === 1) {
+                            $bullet = '└─ ';
+                        } else {
+                            $bullet = '• ';
+                        }
+                        $bulletPadding = $depth > 0 ? 4 : 0;
+                        $totalIndent = $indentPx + $bulletPadding;
+                        $style = 'padding-left: ' . (48 + $totalIndent) . 'px;';
+                        if ($depth > 0) {
+                            $style .= ' border-left: 2px solid rgba(79,124,255,0.2);';
+                            $style .= ' margin-left: ' . $totalIndent . 'px;';
+                        }
+                        $unreadBadge = '';
+                        if (($task['unread_count'] ?? 0) > 0) {
+                            $unreadBadge = '<span style="font-size:10px;background:#f07070;color:white;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:bold;">' . $task['unread_count'] . ' нов.</span>';
+                        }
+                        $bulletHtml = $bullet ? '<span style="color:#6b7280;font-weight:normal;">' . $bullet . '</span> ' : '';
+                    ?>
+                    <div class="task-item <?= $selected_task_uuid === $task['uuid'] ? 'active' : '' ?>" 
+                         data-task-uuid="<?= htmlspecialchars($task['uuid']) ?>" 
+                         data-depth="<?= $depth ?>"
+                         style="<?= $style ?>">
+                        <div class="task-title">
+                            <?= $bulletHtml . htmlspecialchars($task['title']) ?>
+                            <?php if (($task['messages_count'] ?? 0) > 0): ?>
+                                <span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[<?= $task['messages_count'] ?>]</span>
+                            <?php endif; ?>
+                            <?= $unreadBadge ?>
+                        </div>
+                        <?php if ($task['assignee_name']): ?>
+                            <div class="task-assignee">👤 <?= htmlspecialchars($task['assignee_name']) ?></div>
+                        <?php endif; ?>
                     </div>
                     <?php endforeach; ?>
+                    <!-- ==================== BLOCK END: Mobile sidebar tasks with hierarchy v3.0 ==================== -->
                 </div>
             </div>
             <?php endforeach; ?>
@@ -9810,12 +10192,48 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="project-count"><?= count($tasks_by_project[$project['uuid']] ?? []) ?></span>
                 </div>
                 <div class="tasks-list" <?= $selected_project_uuid === $project['uuid'] ? 'style="display:block;"' : '' ?>>
-                    <?php foreach (($tasks_by_project[$project['uuid']] ?? []) as $task): ?>
-                    <div class="task-item <?= $selected_task_uuid === $task['uuid'] ? 'active' : '' ?>" data-task-uuid="<?= htmlspecialchars($task['uuid']) ?>">
-                        <div class="task-title"><?= htmlspecialchars($task['title']) ?> <?php if (($task['messages_count'] ?? 0) > 0): ?><span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[<?= $task['messages_count'] ?>]</span><?php endif; ?></div>
-                        <?php if ($task['assignee_name']): ?><div class="task-assignee">👤 <?= htmlspecialchars($task['assignee_name']) ?></div><?php endif; ?>
+                <!-- ==================== BLOCK START: Desktop sidebar tasks with hierarchy v3.0 ==================== -->
+                <?php foreach (($tasks_by_project[$project['uuid']] ?? []) as $task): 
+                    $depth = $task['depth'] ?? 0;
+                    $indentPx = $depth * 20;
+                    $bullet = '';
+                    if ($depth === 0) {
+                        $bullet = '';
+                    } elseif ($depth === 1) {
+                        $bullet = '└─ ';
+                    } else {
+                        $bullet = '• ';
+                    }
+                    $bulletPadding = $depth > 0 ? 4 : 0;
+                    $totalIndent = $indentPx + $bulletPadding;
+                    $style = 'padding-left: ' . (48 + $totalIndent) . 'px;';
+                    if ($depth > 0) {
+                        $style .= ' border-left: 2px solid rgba(79,124,255,0.2);';
+                        $style .= ' margin-left: ' . $totalIndent . 'px;';
+                    }
+                    $unreadBadge = '';
+                    if (($task['unread_count'] ?? 0) > 0) {
+                        $unreadBadge = '<span style="font-size:10px;background:#f07070;color:white;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:bold;">' . $task['unread_count'] . ' нов.</span>';
+                    }
+                    $bulletHtml = $bullet ? '<span style="color:#6b7280;font-weight:normal;">' . $bullet . '</span> ' : '';
+                ?>
+                <div class="task-item <?= $selected_task_uuid === $task['uuid'] ? 'active' : '' ?>" 
+                     data-task-uuid="<?= htmlspecialchars($task['uuid']) ?>" 
+                     data-depth="<?= $depth ?>"
+                     style="<?= $style ?>">
+                    <div class="task-title">
+                        <?= $bulletHtml . htmlspecialchars($task['title']) ?>
+                        <?php if (($task['messages_count'] ?? 0) > 0): ?>
+                            <span style="font-size:11px;color:#4f7cff;background:rgba(79,124,255,0.15);padding:2px 6px;border-radius:10px;margin-left:6px;">[<?= $task['messages_count'] ?>]</span>
+                        <?php endif; ?>
+                        <?= $unreadBadge ?>
                     </div>
-                    <?php endforeach; ?>
+                    <?php if ($task['assignee_name']): ?>
+                        <div class="task-assignee">👤 <?= htmlspecialchars($task['assignee_name']) ?></div>
+                    <?php endif; ?>
+                </div>
+                <?php endforeach; ?>
+                <!-- ==================== BLOCK END: Desktop sidebar tasks with hierarchy v3.0 ==================== -->
                 </div>
             </div>
             <?php endforeach; ?>
@@ -11229,6 +11647,261 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
 
 /* ==================== BLOCK END: Task details panel styles v1.9 ==================== */
 
+/* ==================== BLOCK START: Markdown styles v1.0 ==================== */
+/* ver.1.0 (2026-06-17) - Стили для Markdown-разметки в сообщениях и описаниях */
+/* Поддерживает: заголовки, жирный/курсив, код, блоки кода, списки, цитаты, ссылки */
+
+/* Заголовки */
+.message-text h1, .task-description h1,
+.message-text h2, .task-description h2,
+.message-text h3, .task-description h3 {
+    margin: 12px 0 8px 0;
+    font-weight: 600;
+    word-break: break-word;
+    color: #e9eefc;
+}
+.message-text h1, .task-description h1 { 
+    font-size: 1.8em; 
+    border-bottom: 1px solid rgba(79,124,255,0.2);
+    padding-bottom: 4px;
+}
+.message-text h2, .task-description h2 { font-size: 1.4em; }
+.message-text h3, .task-description h3 { font-size: 1.1em; }
+
+/* Жирный текст */
+.message-text strong, .task-description strong {
+    color: #e9eefc;
+    font-weight: 700;
+}
+
+/* Курсив */
+.message-text em, .task-description em {
+    font-style: italic;
+    color: #c0d0f0;
+}
+
+/* Зачеркивание */
+.message-text del, .task-description del {
+    color: #888888;
+    text-decoration: line-through;
+}
+
+/* Моноширинный код внутри строки */
+.message-text code, .task-description code {
+    background: #1a1a2e;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    color: #f0b050;
+    border: 1px solid #2c2c3e;
+}
+
+/* Блоки кода (многострочные) */
+.message-text pre, .task-description pre {
+    background: #0f172a;
+    padding: 12px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid #2c2c3e;
+    margin: 8px 0;
+    position: relative;
+}
+.message-text pre code, .task-description pre code {
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    color: #e0e0e0;
+    background: transparent;
+    padding: 0;
+    border: none;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Цитаты */
+.message-text blockquote, .task-description blockquote {
+    border-left: 3px solid #70a0ff;
+    padding: 8px 12px;
+    margin: 8px 0;
+    color: #aaaaaa;
+    background: rgba(79,124,255,0.05);
+    border-radius: 0 6px 6px 0;
+}
+.message.own .message-text blockquote {
+    border-left-color: #f0b050;
+    background: rgba(240,176,80,0.05);
+}
+
+/* Списки */
+.message-text ul, .message-text ol, 
+.task-description ul, .task-description ol {
+    padding-left: 24px;
+    margin: 8px 0;
+}
+.message-text li, .task-description li {
+    margin: 4px 0;
+    word-break: break-word;
+}
+.message.own .message-text li {
+    color: #e0e0e0;
+}
+
+/* Горизонтальный разделитель */
+.message-text hr, .task-description hr {
+    border: none;
+    border-top: 1px solid #2c2c3e;
+    margin: 16px 0;
+}
+
+/* Ссылки в Markdown */
+.message-text a:not(.smart-link-message):not(.smart-link-task):not(.smart-link-file):not(.external-link),
+.task-description a:not(.smart-link-message):not(.smart-link-task):not(.smart-link-file):not(.external-link) {
+    color: #70a0ff;
+    text-decoration: underline;
+    word-break: break-all;
+}
+.message.own .message-text a:not(.smart-link-message):not(.smart-link-task):not(.smart-link-file):not(.external-link) {
+    color: #f0b050;
+}
+.message-text a:not(.smart-link-message):not(.smart-link-task):not(.smart-link-file):not(.external-link):hover,
+.task-description a:not(.smart-link-message):not(.smart-link-task):not(.smart-link-file):not(.external-link):hover {
+    color: #90b0ff;
+}
+.message.own .message-text a:not(.smart-link-message):not(.smart-link-task):not(.smart-link-file):not(.external-link):hover {
+    color: #f0c060;
+}
+
+/* Для мобильных устройств уменьшаем размер шрифта кода */
+@media (max-width: 768px) {
+    .message-text pre code, .task-description pre code {
+        font-size: 12px;
+    }
+    .message-text h1, .task-description h1 { font-size: 1.4em; }
+    .message-text h2, .task-description h2 { font-size: 1.2em; }
+    .message-text h3, .task-description h3 { font-size: 1.0em; }
+    .message-text blockquote, .task-description blockquote {
+        padding: 6px 10px;
+    }
+}
+/* ==================== BLOCK END: Markdown styles v1.0 ==================== */
+
+
+/* ==================== BLOCK START: Code block styles for task details panel v1.0 ==================== */
+/* ver.1.0 (2026-06-17) - Стили для блоков кода в панели деталей задач */
+
+/* Блоки кода в панели деталей */
+.task-details-description pre,
+.task-details-description code {
+    background: #0f172a !important;
+    border: 1px solid #2c2c3e !important;
+    border-radius: 8px !important;
+    padding: 12px 16px !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 13px !important;
+    color: #e0e0e0 !important;
+    display: block !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    margin: 8px 0 !important;
+    overflow-x: auto !important;
+    line-height: 1.6 !important;
+}
+
+/* Внутренний код внутри pre */
+.task-details-description pre code {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 13px !important;
+    color: #e0e0e0 !important;
+    display: block !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    line-height: 1.6 !important;
+}
+
+/* Инлайн-код внутри текста (не в pre) */
+.task-details-description code:not(pre code) {
+    background: #1a1a2e !important;
+    padding: 2px 8px !important;
+    border-radius: 4px !important;
+    font-family: 'Courier New', monospace !important;
+    font-size: 13px !important;
+    color: #f0b050 !important;
+    border: 1px solid #2c2c3e !important;
+    display: inline !important;
+}
+
+/* Заголовки в панели */
+.task-details-description h1,
+.task-details-description h2,
+.task-details-description h3,
+.task-details-description h4 {
+    margin: 16px 0 8px 0 !important;
+    font-weight: 600 !important;
+    color: #e9eefc !important;
+    word-break: break-word !important;
+}
+.task-details-description h1 { font-size: 1.6em !important; border-bottom: 1px solid rgba(79,124,255,0.2) !important; padding-bottom: 4px !important; }
+.task-details-description h2 { font-size: 1.3em !important; color: #70a0ff !important; }
+.task-details-description h3 { font-size: 1.1em !important; color: #c0d0f0 !important; }
+.task-details-description h4 { font-size: 1.0em !important; color: #e0e0e0 !important; }
+
+/* Жирный текст */
+.task-details-description strong {
+    color: #e9eefc !important;
+    font-weight: 700 !important;
+}
+
+/* Курсив */
+.task-details-description em {
+    font-style: italic !important;
+    color: #c0d0f0 !important;
+}
+
+/* Списки */
+.task-details-description ul,
+.task-details-description ol {
+    padding-left: 24px !important;
+    margin: 8px 0 !important;
+}
+.task-details-description li {
+    margin: 4px 0 !important;
+    color: #e0e0e0 !important;
+}
+
+/* Горизонтальные разделители */
+.task-details-description hr {
+    border: none !important;
+    border-top: 1px solid #2c2c3e !important;
+    margin: 16px 0 !important;
+}
+
+/* Ссылки */
+.task-details-description a {
+    color: #70a0ff !important;
+    text-decoration: underline !important;
+    word-break: break-all !important;
+}
+.task-details-description a:hover {
+    color: #90b0ff !important;
+}
+
+/* Для мобильных устройств */
+@media (max-width: 768px) {
+    .task-details-description pre,
+    .task-details-description pre code {
+        font-size: 12px !important;
+        padding: 8px 12px !important;
+    }
+    .task-details-description h1 { font-size: 1.4em !important; }
+    .task-details-description h2 { font-size: 1.2em !important; }
+    .task-details-description h3 { font-size: 1.0em !important; }
+}
+
+
+/* ==================== BLOCK END: Code block styles for task details panel v1.0 ==================== */
 </style>
 
 
@@ -11247,12 +11920,10 @@ logDebug('[SMART_UPDATE] v8.31 initialized with smart updates for all mutations'
 </div>
 
 <script nonce="<?= CSP_NONCE ?>">
-// ==================== BLOCK START: Task details panel functionality v1.2 ====================
-// ver.1.0 (2026-06-11) - Базовая реализация панели деталей задачи
-// ver.1.1 (2026-06-11) - Добавлена функция parseDescriptionLinks для ссылок в описании
-// ver.1.2 (2026-06-11) - Исправлено форматирование дат (используется formatDate из глобальной области)
+// ==================== BLOCK START: parseTaskDetailsLinks v2.0 (FIXED) ====================
+// ver.2.0 (2026-06-19) - ИСПРАВЛЕНА ОБРАБОТКА ВНЕШНИХ ССЫЛОК
+// - Используется правильное регулярное выражение с поддержкой ? и других спецсимволов
 
-// Функция для парсинга ссылок в описании (аналог parseDescriptionLinks из projects.php)
 function parseTaskDetailsLinks(text) {
     if (!text) return '';
     
@@ -11261,8 +11932,8 @@ function parseTaskDetailsLinks(text) {
     div.textContent = text;
     var escaped = div.innerHTML;
     
-    // URL regex
-    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
+    // URL regex - ИСПРАВЛЕННАЯ ВЕРСИЯ
+    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/gi;
     
     escaped = escaped.replace(urlRegex, function(match) {
         var lowerMatch = match.toLowerCase();
@@ -11292,6 +11963,8 @@ function parseTaskDetailsLinks(text) {
     
     return escaped;
 }
+// ==================== BLOCK END: parseTaskDetailsLinks v2.0 ====================
+
 
 // Глобальная переменная для хранения состояния панели
 var taskDetailsPanel = {
@@ -11310,11 +11983,10 @@ function formatTaskDate(ts) {
     return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) + ' (' + tzName + ')';
 }
 
-// ==================== BLOCK START: loadTaskDetails v1.3 (with project users) ====================
-// ver.1.0 - Базовая версия
-// ver.1.1 (2026-06-14) - ДОБАВЛЕНО СОХРАНЕНИЕ project_uuid
-// ver.1.2 (2026-06-14) - ДОБАВЛЕНО ЛОГГИРОВАНИЕ ДЛЯ ОТЛАДКИ
-// ver.1.3 (2026-06-14) - ДОБАВЛЕНА ЗАГРУЗКА СПИСКА ПОЛЬЗОВАТЕЛЕЙ ПРОЕКТА ДЛЯ SELECT ИСПОЛНИТЕЛЯ
+// ==================== BLOCK START: loadTaskDetails v1.6 (обновляет чистое имя из данных) ====================
+// ver.1.6 (2026-06-17) - ИСПРАВЛЕНИЕ: ОБНОВЛЯЕТ ЧИСТОЕ ИМЯ ИЗ ДАННЫХ СЕРВЕРА
+// - Берет task.title из данных сервера (чистое имя без буллетов)
+// - Сохраняет в currentTaskDetailsCleanTitle
 
 function loadTaskDetails(taskUuid) {
     if (!taskUuid) {
@@ -11359,13 +12031,28 @@ function loadTaskDetails(taskUuid) {
         logDebug('[TASK_DETAILS] Response received, success:', data.success);
         
         if (data.success && data.task) {
-            // Сохраняем данные задачи в глобальную переменную
+            // ========== СОХРАНЯЕМ ВСЕ ДАННЫЕ ==========
             window.currentTaskDetailsData = data.task;
             window.currentTaskDetailsProjectUuid = data.task.project_uuid;
+            window.currentTaskDetailsParentUuid = data.task.parent_task_uuid || '';
             window.currentTaskDetailsUuid = data.task.uuid;
-            logDebug('[TASK_DETAILS] Task loaded, project_uuid:', data.task.project_uuid);
             
-            // ========== v1.3: Загружаем список пользователей проекта для select исполнителя ==========
+            // ========== ОБНОВЛЯЕМ ЧИСТОЕ ИМЯ ИЗ ДАННЫХ СЕРВЕРА ==========
+            // task.title из БД — это ЧИСТОЕ имя (без буллетов)
+            var cleanTitle = data.task.title || '';
+            // Убираем [число] если есть (защита)
+            cleanTitle = cleanTitle.replace(/\s*\[\d+\]\s*$/, '').trim();
+            
+            // Если cleanTitle пустой, используем заголовок из данных
+            if (!cleanTitle && data.task.title) {
+                cleanTitle = data.task.title;
+            }
+            
+            window.currentTaskDetailsCleanTitle = cleanTitle;
+            
+            logDebug('[TASK_DETAILS] Task loaded, clean title from server: "' + cleanTitle + '"');
+            logDebug('[TASK_DETAILS] project_uuid:', data.task.project_uuid, 'parent_task_uuid:', window.currentTaskDetailsParentUuid);
+            
             var projectUuid = data.task.project_uuid;
             if (projectUuid && (!window.projectUsersList || window.projectUsersListProjectUuid !== projectUuid)) {
                 logDebug('[TASK_DETAILS] Loading project users for project:', projectUuid);
@@ -11392,20 +12079,16 @@ function loadTaskDetails(taskUuid) {
                     } else {
                         window.projectUsersList = [];
                         window.projectUsersListProjectUuid = null;
-                        logDebug('[TASK_DETAILS] No users loaded or error:', usersData.error);
                     }
-                    // Рендерим панель после загрузки пользователей
                     renderTaskDetails(data.task);
                 })
                 .catch(function(err) {
                     logDebug('[TASK_DETAILS] Error loading project users:', err);
                     window.projectUsersList = [];
                     window.projectUsersListProjectUuid = null;
-                    // Всё равно рендерим панель, но без списка пользователей
                     renderTaskDetails(data.task);
                 });
             } else {
-                // Пользователи уже загружены или проект не указан
                 if (window.projectUsersList && window.projectUsersListProjectUuid === projectUuid) {
                     logDebug('[TASK_DETAILS] Using cached project users, count:', window.projectUsersList.length);
                 }
@@ -11426,7 +12109,7 @@ function loadTaskDetails(taskUuid) {
         }
     });
 }
-// ==================== BLOCK END: loadTaskDetails v1.3 ====================
+// ==================== BLOCK END: loadTaskDetails v1.6 ====================
 
 
 // ==================== BLOCK START: Helper functions for task details panel v1.0 ====================
@@ -11488,7 +12171,7 @@ function parseTaskDetailsLinks(text) {
     var escaped = div.innerHTML;
     
     // URL regex
-    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
+    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/gi;
     
     escaped = escaped.replace(urlRegex, function(match) {
         var lowerMatch = match.toLowerCase();
@@ -11521,11 +12204,168 @@ function parseTaskDetailsLinks(text) {
 // ==================== BLOCK END: Helper functions for task details panel v1.0 ====================
 
 
-// ==================== BLOCK START: renderTaskDetails v2.5 (with sticky actions) ====================
+// ==================== BLOCK START: parseDescriptionLinks v8.0 (FIXED: links before markdown, lists preserved) ====================
+// ver.8.0 (2026-06-19) - ПОЛНОСТЬЮ ПЕРЕРАБОТАНА
+// - Исправлена обработка внешних ссылок: теперь обрабатываются ДО Markdown
+// - Это предотвращает интерпретацию _ и * в URL как Markdown-разметки
+// - Исправлена обработка списков: преобразование \n → <br> выполняется ПОСЛЕ Markdown
+// - Списки теперь правильно распознаются и отображаются
+// - Сохранена полная поддержка Markdown: жирный, курсив, зачеркивание, заголовки, списки, цитаты
+
+function parseDescriptionLinks(text) {
+    if (!text) return '';
+    
+    logDebug('[PARSE_DESCRIPTION_JS] v8.0 - FIXED: external links before markdown, lists preserved');
+    
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+    
+    var result = text;
+    
+    // ========== ШАГ 1: ВНЕШНИЕ ССЫЛКИ (ДО MARKDOWN) ==========
+    // Это предотвращает интерпретацию _ и * в URL как Markdown
+    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/gi;
+    result = result.replace(urlRegex, function(url) {
+        var lowerUrl = url.toLowerCase();
+        if (lowerUrl.indexOf('javascript:') === 0 || 
+            lowerUrl.indexOf('data:') === 0 || 
+            lowerUrl.indexOf('vbscript:') === 0) {
+            return url;
+        }
+        var safeUrl = escapeHtml(url);
+        var isTelegram = (lowerUrl.indexOf('tg://') === 0 || lowerUrl.indexOf('telegram://') === 0);
+        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
+        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        var displayText = url;
+        if (displayText.length > 80) {
+            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
+        }
+        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + displayText + '</a>';
+    });
+    
+    // ========== ШАГ 2: БЛОКИ КОДА (ЭКРАНИРУЕМ) ==========
+    result = result.replace(/```([a-z]*)\n([\s\S]*?)\n```/g, function(match, lang, code) {
+        var langAttr = lang ? ' class="language-' + lang + '"' : '';
+        return '<pre><code' + langAttr + '>' + escapeHtml(code) + '</code></pre>';
+    });
+    
+    result = result.replace(/``\n([\s\S]*?)\n``/g, function(match, code) {
+        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+    });
+    
+    result = result.replace(/`\n([\s\S]*?)\n`/g, function(match, code) {
+        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+    });
+    
+    // Инлайн-код
+    result = result.replace(/(?<!<code>)(?<!<pre>)(?<!<\/code>)(?<!<\/pre>)`([^`\n]+)`(?!<\/code>)(?!<\/pre>)/g, function(match, code) {
+        return '<code>' + escapeHtml(code) + '</code>';
+    });
+    
+    // ========== ШАГ 3: MARKDOWN ==========
+    
+    // Жирный
+    result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    result = result.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    
+    // Курсив
+    result = result.replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>');
+    result = result.replace(/_(.+?)_/g, '<em>$1</em>');
+    
+    // Зачеркивание
+    result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    
+    // ========== СПИСКИ (ДО ПРЕОБРАЗОВАНИЯ ПЕРЕНОСОВ) ==========
+    // Нумерованные списки: 1. текст
+    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
+    // Маркированные списки: - текст или * текст
+    result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
+    
+    // Оборачиваем последовательные <li> в <ul>/<ol>
+    result = result.replace(/((?:<li>.*<\/li>\s*)+)/g, function(match) {
+        // Проверяем, содержит ли match нумерованный список
+        if (match.indexOf('</li>') !== -1) {
+            // Простая проверка: если есть цифры в начале строк, то это ol
+            var hasNumbers = /<li>\d+\./.test(match);
+            if (hasNumbers) {
+                // Удаляем цифры из <li> (они уже есть в тексте)
+                var cleaned = match.replace(/<li>\d+\.\s+/g, '<li>');
+                return '<ol>' + cleaned + '</ol>';
+            }
+            return '<ul>' + match + '</ul>';
+        }
+        return match;
+    });
+    
+    // ========== ЗАГОЛОВКИ ==========
+    result = result.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    result = result.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    result = result.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    
+    result = result.replace(/###\s+([^\n<]+)/g, '<h3>$1</h3>');
+    result = result.replace(/##\s+([^\n<]+)/g, '<h2>$1</h2>');
+    result = result.replace(/#\s+([^\n<]+)/g, '<h1>$1</h1>');
+    
+    // ========== РАЗДЕЛИТЕЛИ ==========
+    result = result.replace(/^(---|\*\*\*|___)$/gm, '<hr>');
+    
+    // ========== ЦИТАТЫ ==========
+    result = result.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+    
+    // ========== ССЫЛКИ [текст](url) ==========
+    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, linkText, url) {
+        var lowerUrl = url.toLowerCase();
+        if (lowerUrl.indexOf('javascript:') === 0 || 
+            lowerUrl.indexOf('data:') === 0 || 
+            lowerUrl.indexOf('vbscript:') === 0) {
+            return linkText;
+        }
+        var safeUrl = escapeHtml(url);
+        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return '<a href="' + safeUrl + '"' + targetAttr + '>' + linkText + '</a>';
+    });
+    
+    // ========== ШАГ 4: ПРЕОБРАЗОВАНИЕ ПЕРЕНОСОВ СТРОК (ПОСЛЕ MARKDOWN) ==========
+    // Разбиваем по строкам, но сохраняем HTML-теги
+    var lines = result.split('\n');
+    var finalResult = [];
+    
+    for (var j = 0; j < lines.length; j++) {
+        var line = lines[j];
+        // Если строка начинается с < и это HTML-тег, оставляем как есть
+        if (/^\s*<[a-z]/.test(line) || /^\s*<\/[a-z]/.test(line)) {
+            finalResult.push(line);
+        } else {
+            // Иначе добавляем <br> (но не в конце, если следующий элемент тоже HTML)
+            finalResult.push(line);
+            if (j < lines.length - 1) {
+                // Проверяем следующую строку
+                var nextLine = lines[j + 1];
+                if (!/^\s*<[a-z]/.test(nextLine) && !/^\s*<\/[a-z]/.test(nextLine)) {
+                    finalResult.push('<br>');
+                }
+            }
+        }
+    }
+    
+    result = finalResult.join('');
+    
+    logDebug('[PARSE_DESCRIPTION_JS] Final output length: ' + result.length);
+    return result;
+}
+// ==================== BLOCK END: parseDescriptionLinks v8.0 ====================
+
+
+// ==================== BLOCK START: renderTaskDetails v2.6 (with parent display fix) ====================
 // ver.2.5 (2026-06-15) - ФИКСАЦИЯ КНОПОК ВНИЗУ
+// ver.2.6 (2026-06-17) - ИСПРАВЛЕНО ОТОБРАЖЕНИЕ РОДИТЕЛЯ В РЕЖИМЕ ПРОСМОТРА
 
 function renderTaskDetails(task) {
-    logDebug('[TASK_DETAILS] v2.5 Rendering task details for:', task.uuid);
+    logDebug('[TASK_DETAILS] v2.6 Rendering task details for:', task.uuid);
     
     var statusText = (task.status === 1) ? '✅ Выполнена' : '🟢 Активна';
     var statusClass = (task.status === 1) ? 'completed' : '';
@@ -11536,7 +12376,7 @@ function renderTaskDetails(task) {
     var descrHtml = '';
     var descrText = task.descr || '';
     if (descrText.trim() !== '') {
-        descrHtml = '<div class="task-details-description">' + parseTaskDetailsLinks(descrText) + '</div>';
+        descrHtml = '<div class="task-details-description">' + parseDescriptionLinks(descrText) + '</div>';
     } else {
         descrHtml = '<div class="task-details-description-empty">Нет описания</div>';
     }
@@ -11552,7 +12392,7 @@ function renderTaskDetails(task) {
         }
     }
     
-    // ========== ФОРМА РЕДАКТИРОВАНИЯ (скрыта по умолчанию) ==========
+    // ========== ФОРМА РЕДАКТИРОВАНИЯ ==========
     var editFormHtml = `
         <div id="task-details-edit-form" style="display: none;">
             <div class="form-group">
@@ -11635,7 +12475,7 @@ function renderTaskDetails(task) {
     // Ссылка на задачу в projects.php
     var taskUrl = window.location.origin + (window.APP_BASE || '') + '/projects.php?task=' + task.uuid;
     
-    // Кнопки действий (ОБЕРНУТЫ В .task-details-actions-container для правильного sticky)
+    // Кнопки действий
     var actionButtonsHtml = `
         <div class="task-details-actions" id="task-details-view-actions">
             <button class="task-details-btn-primary" id="task-details-edit-btn">✏️ Редактировать</button>
@@ -11647,16 +12487,13 @@ function renderTaskDetails(task) {
         </div>
     `;
     
-    // ========== СОБИРАЕМ ВЕСЬ HTML ДЛЯ ПАНЕЛИ ==========
-    // ОБОРАЧИВАЕМ В .task-details-content ДЛЯ ПРАВИЛЬНОЙ ПРОКРУТКИ
+    // ========== СОБИРАЕМ ВЕСЬ HTML ==========
     var html = '<div class="task-details-content">';
     
-    // Блок с родителями
     if (parentsHtml) {
         html += parentsHtml;
     }
     
-    // Блок статуса и исполнителя (режим просмотра)
     html += '<div id="task-details-view-mode">';
     html += '<div class="task-details-field">';
     html += '<div class="task-details-field-label">📋 Статус</div>';
@@ -11697,26 +12534,21 @@ function renderTaskDetails(task) {
     html += '<div class="task-details-field">';
     html += filesViewHtml;
     html += '</div>';
-    html += '</div>'; // закрываем view-mode
+    html += '</div>';
     
-    // Режим редактирования (скрыт)
     html += '<div id="task-details-edit-mode" style="display: none;">';
     html += editFormHtml;
     html += '</div>';
     
-    // Кнопки действий (ДОБАВЛЯЕМ ПОСЛЕ ВСЕГО КОНТЕНТА, ЧТОБЫ ОНИ БЫЛИ ВНИЗУ)
     html += actionButtonsHtml;
-    
-    html += '</div>'; // закрываем task-details-content
+    html += '</div>';
     
     var bodyContainer = document.getElementById('taskDetailsBody');
     if (bodyContainer) {
         bodyContainer.innerHTML = html;
         
-        // Рендерим список файлов в режиме редактирования
         renderTaskDetailsFilesList(files);
         
-        // Назначаем обработчики
         var editBtn = document.getElementById('task-details-edit-btn');
         if (editBtn) editBtn.onclick = function() { enterTaskEditMode(task); };
         
@@ -11726,7 +12558,6 @@ function renderTaskDetails(task) {
         var cancelBtn = document.getElementById('task-details-cancel-btn');
         if (cancelBtn) cancelBtn.onclick = function() { cancelTaskEditMode(task); };
         
-        // Обработчик для загрузки файлов по Enter в поле выбора файла
         var fileUploadInput = document.getElementById('task-details-file-upload');
         if (fileUploadInput) {
             fileUploadInput.onkeypress = function(e) {
@@ -11738,7 +12569,6 @@ function renderTaskDetails(task) {
         }
     }
     
-    // Применяем отступ заголовка на мобильных после рендеринга
     if (window.innerWidth <= 768) {
         setTimeout(function() {
             var header = document.querySelector('.task-details-header');
@@ -11751,7 +12581,7 @@ function renderTaskDetails(task) {
     
     logDebug('[TASK_DETAILS] Rendering complete');
 }
-// ==================== BLOCK END: renderTaskDetails v2.5 ====================
+// ==================== BLOCK END: renderTaskDetails v2.6 ====================
 
 // Вспомогательная функция для рендеринга списка файлов в режиме редактирования
 function renderTaskDetailsFilesList(files) {
@@ -11781,13 +12611,17 @@ function renderTaskDetailsFilesList(files) {
 }
 // ==================== BLOCK END: renderTaskDetails v2.0 ====================
 
-// ==================== BLOCK START: enterTaskEditMode v1.3 (with content wrapper) ====================
+// ==================== BLOCK START: enterTaskEditMode v1.4 (with parent_task_uuid) ====================
 // ver.1.3 (2026-06-15) - СОХРАНЕНИЕ КОНТЕЙНЕРА .task-details-content ПРИ ПЕРЕКЛЮЧЕНИИ
+// ver.1.4 (2026-06-17) - ДОБАВЛЕНО СОХРАНЕНИЕ parent_task_uuid В ГЛОБАЛЬНУЮ ПЕРЕМЕННУЮ
 
 function enterTaskEditMode(task) {
     logDebug('[TASK_DETAILS_EDIT] Entering edit mode for task:', task.uuid);
     
-    // Скрываем режим просмотра, показываем режим редактирования
+    // Сохраняем parent_task_uuid для использования при сохранении
+    window.currentTaskDetailsParentUuid = task.parent_task_uuid || '';
+    logDebug('[TASK_DETAILS_EDIT] Saved parent_task_uuid for editing:', window.currentTaskDetailsParentUuid);
+    
     var viewMode = document.getElementById('task-details-view-mode');
     var editMode = document.getElementById('task-details-edit-mode');
     var editForm = document.getElementById('task-details-edit-form');
@@ -11800,7 +12634,6 @@ function enterTaskEditMode(task) {
     if (viewActions) viewActions.style.display = 'none';
     if (editActions) editActions.style.display = 'flex';
     
-    // Заполняем поля формы текущими данными
     var descrField = document.getElementById('task-details-descr');
     var assigneeField = document.getElementById('task-details-assignee');
     var timeStartField = document.getElementById('task-details-time-start');
@@ -11811,7 +12644,6 @@ function enterTaskEditMode(task) {
     if (timeStartField) timeStartField.value = utcToLocalDatetimeString(task.time_start_utc);
     if (timeEndField) timeEndField.value = utcToLocalDatetimeString(task.time_end_plan_utc);
     
-    // Обновляем список файлов
     var files = task.files || [];
     if (typeof renderTaskDetailsFilesList === 'function') {
         renderTaskDetailsFilesList(files);
@@ -11819,7 +12651,7 @@ function enterTaskEditMode(task) {
     
     logDebug('[TASK_DETAILS_EDIT] Edit mode activated');
 }
-// ==================== BLOCK END: enterTaskEditMode v1.3 ====================
+// ==================== BLOCK END: enterTaskEditMode v1.4 ====================
 
 // ==================== BLOCK START: cancelTaskEditMode v1.1 ====================
 function cancelTaskEditMode(originalTask) {
@@ -11843,13 +12675,10 @@ function cancelTaskEditMode(originalTask) {
 }
 // ==================== BLOCK END: cancelTaskEditMode v1.1 ====================
 
-// ==================== BLOCK START: saveTaskDetails v1.3 (FIXED) ====================
-// ver.1.0 - Базовая версия
-// ver.1.1 (2026-06-14) - ИСПРАВЛЕНА ОШИБКА "Ошибка обработки ответа сервера"
-// ver.1.2 (2026-06-14) - ДОБАВЛЕНО ПОЛЕ "ИСПОЛНИТЕЛЬ" ПРИ СОХРАНЕНИИ
-// ver.1.3 (2026-06-14) - ИСПРАВЛЕНИЕ: БЕРЁМ ЧИСТЫЙ ЗАГОЛОВОК ИЗ currentTaskDetailsCleanTitle
-//                       - Удалено получение заголовка из DOM (который мог содержать счётчик [число])
-//                       - Добавлено логирование для отладки
+// ==================== BLOCK START: saveTaskDetails v1.6 (использует чистое имя из переменной) ====================
+// ver.1.6 (2026-06-17) - ИСПРАВЛЕНИЕ: ИСПОЛЬЗУЕТ ЧИСТОЕ ИМЯ ИЗ ПЕРЕМЕННОЙ
+// - Берет taskTitle из window.currentTaskDetailsCleanTitle
+// - НЕ добавляет буллеты при сохранении
 
 function saveTaskDetails(taskUuid) {
     logDebug('[TASK_DETAILS_EDIT] Saving task details for:', taskUuid);
@@ -11865,39 +12694,36 @@ function saveTaskDetails(taskUuid) {
     var localStart = document.getElementById('task-details-time-start') ? document.getElementById('task-details-time-start').value : '';
     var localEnd = document.getElementById('task-details-time-end') ? document.getElementById('task-details-time-end').value : '';
     
-    // ========== ИСПРАВЛЕНИЕ v1.3: БЕРЁМ ЧИСТЫЙ ЗАГОЛОВОК ИЗ СОХРАНЁННОЙ ПЕРЕМЕННОЙ ==========
-    // Раньше заголовок брался из DOM (taskDetailsTitle), который мог содержать счётчик [число]
-    // Это приводило к сохранению счётчика обратно в БД и появлению "[9] [9]" в названии задачи
-    var taskTitle = window.currentTaskDetailsCleanTitle || '';
-    
-    if (!taskTitle && window.currentTaskDetailsData) {
-        taskTitle = window.currentTaskDetailsData.title || '';
-        logDebug('[TASK_DETAILS_EDIT] Got title from currentTaskDetailsData:', taskTitle);
+    var parentTaskUuid = window.currentTaskDetailsParentUuid || '';
+    if (!parentTaskUuid && window.currentTaskDetailsData) {
+        parentTaskUuid = window.currentTaskDetailsData.parent_task_uuid || '';
     }
     
+    // ========== ИСПОЛЬЗУЕМ ЧИСТОЕ ИМЯ ИЗ ПЕРЕМЕННОЙ ==========
+    // window.currentTaskDetailsCleanTitle — это ЧИСТОЕ имя (без буллетов, без [число])
+    var taskTitle = window.currentTaskDetailsCleanTitle || '';
+    
+    // Если вдруг переменная пустая, пробуем взять из данных
+    if (!taskTitle && window.currentTaskDetailsData) {
+        taskTitle = window.currentTaskDetailsData.title || '';
+    }
+    
+    logDebug('[TASK_DETAILS_EDIT] Clean task title to save: "' + taskTitle + '"');
+    logDebug('[TASK_DETAILS_EDIT] Parent task UUID to save:', parentTaskUuid);
+    logDebug('[TASK_DETAILS_EDIT] Assignee UUID:', newAssigneeUuid);
+    
     if (!taskTitle) {
-        // Fallback: пробуем извлечь из DOM, но ОБЯЗАТЕЛЬНО очищаем от счётчика
         var titleHeader = document.getElementById('taskDetailsTitle');
         if (titleHeader) {
-            taskTitle = titleHeader.innerText.replace(/^📋\s*/, '').replace(/\s*\[\d+\]\s*$/, '').trim();
-            logDebug('[TASK_DETAILS_EDIT] Got title from DOM (fallback, cleaned):', taskTitle);
+            var domTitle = titleHeader.innerText.replace(/^📋\s*/, '').trim();
+            // Убираем буллеты только если они есть (защита)
+            taskTitle = domTitle.replace(/^[└─•]+\s*/, '').trim();
+            taskTitle = taskTitle.replace(/^└─/, '').trim();
+            taskTitle = taskTitle.replace(/^•/, '').trim();
+            logDebug('[TASK_DETAILS_EDIT] Got title from DOM (fallback): "' + taskTitle + '"');
         }
     }
     
-    logDebug('[TASK_DETAILS_EDIT] Final clean task title:', taskTitle);
-    // ====================================================================================
-    
-    // Получаем project_uuid из сохранённой переменной или из данных задачи
-    var projectUuid = window.currentTaskDetailsProjectUuid;
-    if (!projectUuid && window.currentTaskDetailsData) {
-        projectUuid = window.currentTaskDetailsData.project_uuid;
-    }
-    
-    logDebug('[TASK_DETAILS_EDIT] Task title:', taskTitle);
-    logDebug('[TASK_DETAILS_EDIT] Project UUID:', projectUuid);
-    logDebug('[TASK_DETAILS_EDIT] Assignee UUID:', newAssigneeUuid);
-    
-    // Показываем индикатор загрузки на кнопке сохранения
     var saveBtn = document.getElementById('task-details-save-btn');
     var originalBtnText = saveBtn ? saveBtn.innerHTML : '💾 Сохранить';
     if (saveBtn) {
@@ -11908,9 +12734,9 @@ function saveTaskDetails(taskUuid) {
     var formData = new URLSearchParams();
     formData.append('action', 'edit_task');
     formData.append('uuid', taskUuid);
-    formData.append('project_uuid', projectUuid || '');
-    formData.append('parent_task_uuid', '');
-    formData.append('title', taskTitle);
+    formData.append('project_uuid', window.currentTaskDetailsProjectUuid || '');
+    formData.append('parent_task_uuid', parentTaskUuid);
+    formData.append('title', taskTitle);  // ← Сохраняем ЧИСТОЕ имя
     formData.append('descr', newDescr);
     formData.append('assigned_to_uuid', newAssigneeUuid);
     formData.append('time_start', localStart);
@@ -11918,7 +12744,7 @@ function saveTaskDetails(taskUuid) {
     formData.append('ajax_mode', '1');
     addCsrfToUrlParams(formData);
     
-    logDebug('[TASK_DETAILS_EDIT] Sending request to:', window.APP_BASE + '/projects.php');
+    logDebug('[TASK_DETAILS_EDIT] Form data - title: "' + taskTitle + '", parent_task_uuid: ' + parentTaskUuid);
     
     fetch(window.APP_BASE + '/projects.php', {
         method: 'POST',
@@ -11947,8 +12773,18 @@ function saveTaskDetails(taskUuid) {
             if (data.task) {
                 window.currentTaskDetailsData = data.task;
                 window.currentTaskDetailsProjectUuid = data.task.project_uuid;
-                // Обновляем сохранённый чистый заголовок из ответа сервера
-                window.currentTaskDetailsCleanTitle = data.task.title || taskTitle;
+                window.currentTaskDetailsParentUuid = data.task.parent_task_uuid || '';
+                
+                // ========== ОБНОВЛЯЕМ ЧИСТОЕ ИМЯ ПОСЛЕ СОХРАНЕНИЯ ==========
+                var savedTitle = data.task.title || taskTitle;
+                // Убираем [число] если есть
+                savedTitle = savedTitle.replace(/\s*\[\d+\]\s*$/, '').trim();
+                // Убираем буллеты на случай, если они попали (защита)
+                savedTitle = savedTitle.replace(/^[└─•]+\s*/, '').trim();
+                savedTitle = savedTitle.replace(/^└─/, '').trim();
+                savedTitle = savedTitle.replace(/^•/, '').trim();
+                window.currentTaskDetailsCleanTitle = savedTitle;
+                
                 renderTaskDetails(data.task);
             } else {
                 logDebug('[TASK_DETAILS_EDIT] No task data in response, reloading');
@@ -11970,8 +12806,8 @@ function saveTaskDetails(taskUuid) {
             
             if (window.currentTaskUuid === taskUuid) {
                 var chatTitle = document.getElementById('chat-title');
-                if (chatTitle && taskTitle) {
-                    chatTitle.textContent = taskTitle;
+                if (chatTitle && savedTitle) {
+                    chatTitle.textContent = savedTitle;
                 }
             }
         } else {
@@ -11988,7 +12824,7 @@ function saveTaskDetails(taskUuid) {
         }
     });
 }
-// ==================== BLOCK END: saveTaskDetails v1.3 ====================
+// ==================== BLOCK END: saveTaskDetails v1.6 ====================
 
 function uploadTaskFileFromDetails() {
     var taskUuid = window.currentTaskDetailsUuid;
@@ -12111,8 +12947,10 @@ function getFileIconFromName(filename) {
     return icons[ext] || '📎';
 }
 
-// ==================== BLOCK START: openTaskDetailsPanel v1.5 (FIXED MOBILE) ====================
-// ver.1.5 (2026-06-15) - ФИКСАЦИЯ КНОПОК И ОТСТУП ДЛЯ ФАЙЛОВ НА МОБИЛЬНЫХ
+// ==================== BLOCK START: openTaskDetailsPanel v1.8 (чистое имя в переменную) ====================
+// ver.1.8 (2026-06-17) - ИСПРАВЛЕНИЕ: ХРАНИМ ЧИСТОЕ ИМЯ В ПЕРЕМЕННОЙ
+// - НЕ изменяет taskTitle, а сохраняет чистое имя отдельно
+// - Буллеты удаляются ТОЛЬКО для сохранения в переменную
 
 function openTaskDetailsPanel(taskUuid, taskTitle) {
     logDebug('[TASK_DETAILS] Opening panel for task:', taskUuid, 'title:', taskTitle);
@@ -12131,20 +12969,27 @@ function openTaskDetailsPanel(taskUuid, taskTitle) {
         return;
     }
     
-    // ОЧИЩАЕМ заголовок от счётчика сообщений [число] в конце
+    // ========== СОХРАНЯЕМ ЧИСТОЕ ИМЯ В ПЕРЕМЕННУЮ ==========
+    // Убираем [число] и буллеты ТОЛЬКО ДЛЯ ХРАНЕНИЯ
     var cleanTitle = taskTitle || 'Информация о задаче';
     cleanTitle = cleanTitle.replace(/\s*\[\d+\]\s*$/, '').trim();
+    cleanTitle = cleanTitle.replace(/^[└─•]+\s*/, '').trim();
+    cleanTitle = cleanTitle.replace(/^└─/, '').trim();
+    cleanTitle = cleanTitle.replace(/^•/, '').trim();
     
-    logDebug('[TASK_DETAILS] Cleaned title: "' + cleanTitle + '" (original: "' + taskTitle + '")');
+    logDebug('[TASK_DETAILS] Clean title stored: "' + cleanTitle + '" (original: "' + taskTitle + '")');
     
     if (titleElement) {
+        // В ЗАГОЛОВКЕ панели показываем ЧИСТОЕ имя
         titleElement.innerHTML = '📋 ' + cleanTitle;
     }
     
+    // ========== СОХРАНЯЕМ ЧИСТОЕ ИМЯ В ГЛОБАЛЬНОЙ ПЕРЕМЕННОЙ ==========
     window.currentTaskDetailsUuid = taskUuid;
     window.currentTaskDetailsData = null;
     window.currentTaskDetailsProjectUuid = null;
-    window.currentTaskDetailsCleanTitle = cleanTitle;
+    window.currentTaskDetailsParentUuid = null;
+    window.currentTaskDetailsCleanTitle = cleanTitle;  // ← ЧИСТОЕ ИМЯ ДЛЯ РЕДАКТИРОВАНИЯ
     
     loadTaskDetails(taskUuid);
     
@@ -12152,35 +12997,20 @@ function openTaskDetailsPanel(taskUuid, taskTitle) {
     overlay.classList.add('open');
     taskDetailsPanel.isOpen = true;
     
-    // Блокируем скролл body на мобильных
     if (window.innerWidth <= 768) {
         document.body.style.overflow = 'hidden';
-        
-        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: если заголовок перекрыт гамбургером, добавляем отступ
         setTimeout(function() {
             var header = document.querySelector('.task-details-header');
-            if (header) {
-                var currentPaddingLeft = window.getComputedStyle(header).paddingLeft;
-                logDebug('[TASK_DETAILS] Header padding-left:', currentPaddingLeft);
-                if (parseInt(currentPaddingLeft) < 60) {
-                    header.style.paddingLeft = '70px';
-                    logDebug('[TASK_DETAILS] Applied padding-left to header');
-                }
+            if (header && parseInt(window.getComputedStyle(header).paddingLeft) < 60) {
+                header.style.paddingLeft = '70px';
             }
         }, 50);
-        
-        // v1.5: ПРИМЕНЯЕМ ФИКСАЦИЮ КНОПОК НА МОБИЛЬНЫХ
-        setTimeout(function() {
-            fixMobileTaskButtonsPosition();
-        }, 100);
-        setTimeout(function() {
-            fixMobileTaskButtonsPosition();
-        }, 500);
-        setTimeout(function() {
-            fixMobileTaskButtonsPosition();
-        }, 1000);
+        setTimeout(fixMobileTaskButtonsPosition, 100);
+        setTimeout(fixMobileTaskButtonsPosition, 500);
+        setTimeout(fixMobileTaskButtonsPosition, 1000);
     }
 }
+// ==================== BLOCK END: openTaskDetailsPanel v1.8 ====================
 
 // Глобальная функция для фиксации кнопок на мобильных
 window.fixMobileTaskButtonsPosition = function() {
@@ -12241,7 +13071,7 @@ window.fixMobileTaskButtonsPosition = function() {
     
     logDebug('[MOBILE_FIX] Buttons fixed at bottom, safe-area:', safeAreaBottom, 'actionsHeight:', actionsHeight);
 };
-// ==================== BLOCK END: openTaskDetailsPanel v1.5 ====================
+
 
 
 // ==================== BLOCK START: closeTaskDetailsPanel v1.1 ====================
@@ -12460,7 +13290,79 @@ if (document.readyState === 'loading') {
 }
 
 // ==================== BLOCK END: Task details panel functionality v1.2 ====================
+
 </script>
 <!-- ==================== BLOCK END: Task details panel v1.0 ==================== -->
+
+
+<script nonce="<?= CSP_NONCE ?>">
+// ==================== BLOCK START: Auto-expand parent projects for subtasks v1.0 ====================
+// ver.1.0 (2026-06-16) - Автоматическое раскрытие родительских проектов
+// - При загрузке страницы, если активная задача имеет depth > 0,
+//   раскрываем все родительские проекты и прокручиваем к задаче
+// - Сохраняет существующую функциональность скролла
+
+function autoExpandParentProjects() {
+    var activeTaskUuid = window.currentTaskUuid;
+    if (!activeTaskUuid) {
+        logDebug('[AUTO_EXPAND_v1.0] No active task UUID');
+        return;
+    }
+    
+    logDebug('[AUTO_EXPAND_v1.0] Checking for active task:', activeTaskUuid);
+    
+    // Находим активную задачу в сайдбаре
+    var taskElement = document.querySelector('.task-item[data-task-uuid="' + activeTaskUuid + '"]');
+    if (!taskElement) {
+        logDebug('[AUTO_EXPAND_v1.0] Task element not found in DOM, will retry');
+        // Повторная попытка через 500ms
+        setTimeout(autoExpandParentProjects, 500);
+        return;
+    }
+    
+    var depth = parseInt(taskElement.getAttribute('data-depth') || '0');
+    logDebug('[AUTO_EXPAND_v1.0] Task depth:', depth);
+    
+    // Если задача имеет родителей (depth > 0), раскрываем все родительские проекты
+    if (depth > 0) {
+        var projectItem = taskElement.closest('.project-item');
+        while (projectItem) {
+            var tasksList = projectItem.querySelector('.tasks-list');
+            if (tasksList && !tasksList.classList.contains('active')) {
+                tasksList.classList.add('active');
+                logDebug('[AUTO_EXPAND_v1.0] Expanded project:', projectItem.getAttribute('data-project-uuid'));
+            }
+            // Поднимаемся выше (если есть родительский проект)
+            projectItem = projectItem.parentElement.closest('.project-item');
+        }
+        
+        // Прокручиваем к задаче (с небольшой задержкой для рендеринга)
+        setTimeout(function() {
+            if (typeof scrollSidebarToActiveTask === 'function') {
+                scrollSidebarToActiveTask();
+                logDebug('[AUTO_EXPAND_v1.0] Called scrollSidebarToActiveTask');
+            }
+        }, 300);
+    } else {
+        logDebug('[AUTO_EXPAND_v1.0] Task is root (depth=0), no expansion needed');
+    }
+}
+
+// Запускаем после загрузки страницы с несколькими попытками для надёжности
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(autoExpandParentProjects, 300);
+        setTimeout(autoExpandParentProjects, 700);
+        setTimeout(autoExpandParentProjects, 1500);
+    });
+} else {
+    setTimeout(autoExpandParentProjects, 300);
+    setTimeout(autoExpandParentProjects, 700);
+    setTimeout(autoExpandParentProjects, 1500);
+}
+
+logDebug('[AUTO_EXPAND_v1.0] Auto-expand initialized');
+// ==================== BLOCK END: Auto-expand parent projects for subtasks v1.0 ====================
+</script>
 
 <?php require_once __DIR__ . '/layouts/page_end.php'; ?>
