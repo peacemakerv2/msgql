@@ -255,97 +255,6 @@ function upload_message_files($files, &$uploaded_files_info, &$error_message = '
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СООБЩЕНИЙ ====================
 
-
-// ==================== BLOCK START: parseMarkdownToHtml v2.0 (FIXED - NO DOUBLE ESCAPE) ====================
-// ver.2.0 (2026-06-17) - ИСПРАВЛЕНО ДВОЙНОЕ ЭКРАНИРОВАНИЕ
-// - НЕ экранирует весь текст целиком, только опасные части
-// - Сохраняет HTML-сущности, созданные ранее
-// - Использует экранирование только для блоков кода и ссылок
-// - Остальной текст остаётся в исходном виде (уже безопасный)
-
-function parseMarkdownToHtml($text) {
-    if (empty($text)) return '';
-    
-    log_debug("[PARSE_MARKDOWN] v2.0 Processing text length: " . strlen($text));
-    
-    // ========== ШАГ 1: НЕ ЭКРАНИРУЕМ ВЕСЬ ТЕКСТ ==========
-    // Вместо htmlspecialchars для всего текста, экранируем только опасные части
-    
-    // ========== ШАГ 2: Применяем Markdown к сырому тексту ==========
-    $processed = $text;
-    
-    // 2.1 Блоки кода: ```язык\nкод\n``` (ЭКРАНИРУЕМ ТОЛЬКО СОДЕРЖИМОЕ)
-    $processed = preg_replace_callback('/```([a-z]*)\n(.*?)\n```/s', function($matches) {
-        $lang = htmlspecialchars($matches[1], ENT_QUOTES, 'UTF-8');
-        $code = htmlspecialchars($matches[2], ENT_QUOTES, 'UTF-8');
-        $class = $lang ? ' class="language-' . $lang . '"' : '';
-        return '<pre><code' . $class . '>' . $code . '</code></pre>';
-    }, $processed);
-    
-    // 2.2 Моноширинный код: `код` (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
-    $processed = preg_replace_callback('/`([^`]+)`/', function($matches) {
-        return '<code>' . htmlspecialchars($matches[1], ENT_QUOTES, 'UTF-8') . '</code>';
-    }, $processed);
-    
-    // 2.3 Ссылки: [текст](url) (ЭКРАНИРУЕМ URL)
-    $processed = preg_replace_callback('/\[([^\]]+)\]\(([^)]+)\)/', function($matches) {
-        $linkText = $matches[1];
-        $url = $matches[2];
-        $lowerUrl = strtolower($url);
-        
-        // Блокируем опасные схемы
-        if (strpos($lowerUrl, 'javascript:') === 0 || 
-            strpos($lowerUrl, 'data:') === 0 || 
-            strpos($lowerUrl, 'vbscript:') === 0) {
-            log_debug("[PARSE_MARKDOWN] Blocked dangerous URL: " . substr($url, 0, 100));
-            return $linkText;
-        }
-        
-        // Экранируем URL и текст
-        $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
-        $safeText = htmlspecialchars($linkText, ENT_QUOTES, 'UTF-8');
-        $targetAttr = (strpos($lowerUrl, 'mailto:') === 0 || strpos($lowerUrl, 'tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
-        return '<a href="' . $safeUrl . '"' . $targetAttr . '>' . $safeText . '</a>';
-    }, $processed);
-    
-    // ========== ШАГ 3: Жирный, курсив, зачеркивание (БЕЗ ЭКРАНИРОВАНИЯ) ==========
-    // Текст внутри этих тегов уже безопасен, так как мы не экранировали весь текст
-    $processed = preg_replace('/\*\*(.+?)\*\*/', '<strong>$1</strong>', $processed);
-    $processed = preg_replace('/__([^_]+)__/', '<strong>$1</strong>', $processed);
-    $processed = preg_replace('/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/', '<em>$1</em>', $processed);
-    $processed = preg_replace('/_(.+?)_/', '<em>$1</em>', $processed);
-    $processed = preg_replace('/~~(.+?)~~/', '<del>$1</del>', $processed);
-    
-    // ========== ШАГ 4: Заголовки (БЕЗ ЭКРАНИРОВАНИЯ) ==========
-    $processed = preg_replace('/^### (.+)$/m', '<h3>$1</h3>', $processed);
-    $processed = preg_replace('/^## (.+)$/m', '<h2>$1</h2>', $processed);
-    $processed = preg_replace('/^# (.+)$/m', '<h1>$1</h1>', $processed);
-    
-    // Заголовки в любом месте строки
-    $processed = preg_replace('/###\s+([^\n<]+)/', '<h3>$1</h3>', $processed);
-    $processed = preg_replace('/##\s+([^\n<]+)/', '<h2>$1</h2>', $processed);
-    $processed = preg_replace('/#\s+([^\n<]+)/', '<h1>$1</h1>', $processed);
-    
-    // ========== ШАГ 5: Списки (БЕЗ ЭКРАНИРОВАНИЯ) ==========
-    $processed = preg_replace('/^- (.+)$/m', '<li>$1</li>', $processed);
-    $processed = preg_replace('/^\* (.+)$/m', '<li>$1</li>', $processed);
-    $processed = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ul>$1</ul>', $processed);
-    $processed = preg_replace('/^\d+\. (.+)$/m', '<li>$1</li>', $processed);
-    $processed = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ol>$1</ol>', $processed);
-    
-    // ========== ШАГ 6: Горизонтальные разделители и цитаты ==========
-    $processed = preg_replace('/^(---|\*\*\*)$/m', '<hr>', $processed);
-    $processed = preg_replace('/^> (.+)$/m', '<blockquote>$1</blockquote>', $processed);
-    
-    // ========== ШАГ 7: Преобразуем переносы строк в <br> ==========
-    $processed = nl2br($processed);
-    
-    log_debug("[PARSE_MARKDOWN] v2.0 Final output length: " . strlen($processed));
-    return $processed;
-}
-// ==================== BLOCK END: parseMarkdownToHtml v2.0 ====================
-
-
 function get_message_files($message_uuid) {
     $db = msgql_db();
     $files = [];
@@ -4433,27 +4342,15 @@ setTimeout(requestNotificationPermission, 5000);
 <!-- Для краткости я их не дублирую, но в итоговом файле они должны быть полностью -->
 
 <script nonce="<?= CSP_NONCE ?>">
-// ==================== BLOCK START: parseMessageText v12.0 (EXTERNAL LINKS BEFORE MARKDOWN) ====================
-// ver.12.0 (2026-06-19) - ИСПРАВЛЕНИЕ: ВНЕШНИЕ ССЫЛКИ ОБРАБАТЫВАЮТСЯ ДО MARKDOWN
-// - Это предотвращает интерпретацию символов _ и * в URL как Markdown-разметки
-// - Ссылки теперь полностью сохраняются, включая параметры после ?
-// - Сохранена вся предыдущая функциональность: умные ссылки, Markdown, цитаты
+// ==================== BLOCK START: parseMessageText v14.0 - NO MARKDOWN ITALIC ====================
+// ver.14.0 (2026-06-27) - УБРАН КУРСИВ ИЗ ПАРСИНГА СООБЩЕНИЙ
+// - Ссылки обрабатываются корректно (символы _ не ломаются)
+// - Сохранены: ссылки, умные ссылки, блоки кода, жирный текст
+// - Убрано: преобразование _текст_ в <em> (курсив)
 
 function parseMessageText(text) {
     if (!text) return '';
     
-    // НЕ ЭКРАНИРУЕМ ВЕСЬ ТЕКСТ!
-    // Работаем с сырым текстом
-    
-    var currentHost = window.location.host;
-    var appBase = window.APP_BASE || '';
-    var escapedHost = currentHost.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    var escapedAppBase = appBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    var UUID_REGEX = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-    var protocol = window.location.protocol;
-    var baseUrl = protocol + '//' + currentHost + appBase;
-    
-    // Вспомогательная функция для экранирования ТОЛЬКО опасных частей
     function escapeHtml(str) {
         if (!str) return '';
         var div = document.createElement('div');
@@ -4461,7 +4358,44 @@ function parseMessageText(text) {
         return div.innerHTML;
     }
     
-    function safeLink(protocol, uuid, type, displayText) {
+    var result = text;
+    
+    // ================================================================
+    // ШАГ 1: ВНЕШНИЕ ССЫЛКИ (ДО MARKDOWN)
+    // ================================================================
+    var urlRegex = /(?:https?:\/\/|ftp:\/\/|ws:\/\/|wss:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/gi;
+    
+    result = result.replace(urlRegex, function(url) {
+        var lowerUrl = url.toLowerCase();
+        
+        if (lowerUrl.indexOf('javascript:') === 0 || 
+            lowerUrl.indexOf('data:') === 0 || 
+            lowerUrl.indexOf('vbscript:') === 0) {
+            return url;
+        }
+        
+        var safeUrl = url.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var isTelegram = (lowerUrl.indexOf('tg://') === 0 || lowerUrl.indexOf('telegram://') === 0);
+        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
+        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        
+        var displayText = url;
+        if (displayText.length > 80) {
+            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
+        }
+        
+        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + displayText + '</a>';
+    });
+    
+    // ================================================================
+    // ШАГ 2: УМНЫЕ ССЫЛКИ
+    // ================================================================
+    var currentHost = window.location.host;
+    var appBase = window.APP_BASE || '';
+    var baseUrl = window.location.protocol + '//' + currentHost + appBase;
+    var UUID_REGEX = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+    
+    function safeLink(uuid, type, displayText) {
         if (!UUID_REGEX.test(uuid)) return '[неверный идентификатор]';
         var encodedUuid = encodeURIComponent(uuid);
         switch(type) {
@@ -4476,192 +4410,92 @@ function parseMessageText(text) {
         }
     }
     
-    function makeSafeExternalLink(url) {
-        var lowerUrl = url.toLowerCase();
-        
-        // Блокируем опасные схемы
-        if (lowerUrl.indexOf('javascript:') === 0 || 
-            lowerUrl.indexOf('data:') === 0 || 
-            lowerUrl.indexOf('vbscript:') === 0) {
-            return escapeHtml(url);
-        }
-        
-        // Разрешенные протоколы
-        var safeProtocols = ['http://', 'https://', 'tg://', 'telegram://', 'mailto:', 'tel:', 'ftp://', 'ws://', 'wss://', 'magnet:', 'skype:', 'viber:', 'whatsapp:', 'signal:'];
-        var isSafe = false;
-        for (var i = 0; i < safeProtocols.length; i++) {
-            if (lowerUrl.startsWith(safeProtocols[i])) {
-                isSafe = true;
-                break;
-            }
-        }
-        
-        if (!isSafe) {
-            return escapeHtml(url);
-        }
-        
-        // Очищаем от опасных инъекций
-        var cleanUrl = url.replace(/javascript:/gi, '').replace(/data:/gi, '').replace(/vbscript:/gi, '');
-        
-        // Экранируем URL как текст, а затем вставляем в href
-        var safeUrl = cleanUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        
-        var isTelegram = lowerUrl.indexOf('tg://') === 0 || lowerUrl.indexOf('telegram://') === 0;
-        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
-        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
-        
-        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + escapeHtml(url) + '</a>';
-    }
-    
-    // ========== ШАГ 1: ОБРАБОТКА ВНЕШНИХ ССЫЛОК (ДО MARKDOWN) ==========
-    // Это предотвращает интерпретацию символов _ и * в URL как Markdown
-    var escapedText = text;
-    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/gi;
-    escapedText = escapedText.replace(urlRegex, function(match) {
-        if (match.indexOf('<a') !== -1) return match;
-        if (match.indexOf(currentHost) !== -1 && (match.indexOf('http://') === 0 || match.indexOf('https://') === 0)) return match;
-        return makeSafeExternalLink(match);
+    result = result.replace(/\[msg:([a-f0-9\-]{36})\]/gi, function(match, uuid) {
+        return safeLink(uuid, 'msg', '💬 сообщение');
     });
     
-    // ========== ШАГ 2: УМНЫЕ ССЫЛКИ ==========
-    
-    // Маркеры [msg:uuid], [task:uuid], [file:uuid]
-    escapedText = escapedText.replace(/\[msg:([a-f0-9\-]{36})\]/gi, function(match, uuid) {
-        return safeLink('https', uuid, 'msg', '💬 сообщение');
-    });
-    escapedText = escapedText.replace(/\[task:([a-f0-9\-]{36})\]/gi, function(match, uuid) {
-        return safeLink('https', uuid, 'task', '📋 задача');
-    });
-    escapedText = escapedText.replace(/\[file:([a-f0-9\-]{36})\]/gi, function(match, uuid) {
-        return safeLink('https', uuid, 'file', '📎 файл');
+    result = result.replace(/\[task:([a-f0-9\-]{36})\]/gi, function(match, uuid) {
+        return safeLink(uuid, 'task', '📋 задача');
     });
     
-    // ========== ПРОЕКТЫ ==========
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + escapedAppBase + '/projects\\.php\\?(?:task|uuid|id)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'task', '📋 задача');
-        }
-    );
-    escapedText = escapedText.replace(
-        new RegExp(escapedAppBase + '/projects\\.php\\?(?:task|uuid|id)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'task', '📋 задача');
-        }
-    );
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + '/projects\\.php\\?(?:task|uuid|id)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'task', '📋 задача');
-        }
-    );
+    result = result.replace(/\[file:([a-f0-9\-]{36})\]/gi, function(match, uuid) {
+        return safeLink(uuid, 'file', '📎 файл');
+    });
     
-    // ========== СООБЩЕНИЯ ==========
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + escapedAppBase + '/messages\\.php\\?(?:message|msg)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'msg', '💬 сообщение');
-        }
-    );
-    escapedText = escapedText.replace(
-        new RegExp(escapedAppBase + '/messages\\.php\\?(?:message|msg)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'msg', '💬 сообщение');
-        }
-    );
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + '/messages\\.php\\?(?:message|msg)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'msg', '💬 сообщение');
-        }
-    );
+    // ================================================================
+    // ШАГ 3: БЛОКИ КОДА
+    // ================================================================
+    result = result.replace(/```([a-z]*)\n([\s\S]*?)\n```/g, function(match, lang, code) {
+        var langAttr = lang ? ' class="language-' + lang + '"' : '';
+        return '<pre><code' + langAttr + '>' + escapeHtml(code) + '</code></pre>';
+    });
     
-    // ========== ФАЙЛЫ ==========
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + escapedAppBase + '/(?:file_preview|download)\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'file', '📎 файл');
-        }
-    );
-    escapedText = escapedText.replace(
-        new RegExp(escapedAppBase + '/(?:file_preview|download)\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'file', '📎 файл');
-        }
-    );
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + '/file_preview\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'file', '📎 файл');
-        }
-    );
-    escapedText = escapedText.replace(
-        new RegExp('https?://' + escapedHost + '/download\\.php\\?(?:uuid|file)=([a-f0-9\\-]{36})(?:[&\\s]|$)', 'gi'),
-        function(match, uuid) {
-            return safeLink('https', uuid, 'file', '📎 файл');
-        }
-    );
+    result = result.replace(/``\n([\s\S]*?)\n``/g, function(match, code) {
+        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+    });
     
-    // ========== ШАГ 3: ПРИМЕНЯЕМ MARKDOWN ==========
-    logDebug('[MARKDOWN] Processing text length: ' + escapedText.length);
+    result = result.replace(/`\n([\s\S]*?)\n`/g, function(match, code) {
+        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+    });
     
-    // 3.1 Жирный текст: **текст** и __текст__
-    escapedText = escapedText.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    escapedText = escapedText.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-    
-    // 3.2 Курсив: *текст* и _текст_ (с защитой от пересечения с жирным)
-    escapedText = escapedText.replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>');
-    escapedText = escapedText.replace(/_(.+?)_/g, '<em>$1</em>');
-    
-    // 3.3 Зачеркивание: ~~текст~~
-    escapedText = escapedText.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    
-    // 3.4 Моноширинный код: `код` (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
-    escapedText = escapedText.replace(/`([^`]+)`/g, function(match, code) {
+    result = result.replace(/(?<!<code>)(?<!<pre>)(?<!<\/code>)(?<!<\/pre>)`([^`\n]+)`(?!<\/code>)(?!<\/pre>)/g, function(match, code) {
         return '<code>' + escapeHtml(code) + '</code>';
     });
     
-    // 3.5 Блоки кода: ```язык\nкод\n``` (ЭКРАНИРУЕМ СОДЕРЖИМОЕ)
-    escapedText = escapedText.replace(/```([a-z]*)\n(.*?)\n```/gs, function(match, lang, code) {
-        var langAttr = lang ? ' class="language-' + lang + '"' : '';
-        var safeCode = escapeHtml(code);
-        return '<pre><code' + langAttr + '>' + safeCode + '</code></pre>';
+    // ================================================================
+    // ШАГ 4: ЖИРНЫЙ ТЕКСТ (БЕЗ КУРСИВА!)
+    // ================================================================
+    result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    result = result.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    
+    // ================================================================
+    // ШАГ 5: ЗАЧЕРКИВАНИЕ
+    // ================================================================
+    result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    
+    // ================================================================
+    // ШАГ 6: ЗАГОЛОВКИ
+    // ================================================================
+    result = result.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    result = result.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    result = result.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    
+    result = result.replace(/###\s+([^\n<]+)/g, '<h3>$1</h3>');
+    result = result.replace(/##\s+([^\n<]+)/g, '<h2>$1</h2>');
+    result = result.replace(/#\s+([^\n<]+)/g, '<h1>$1</h1>');
+    
+    // ================================================================
+    // ШАГ 7: СПИСКИ
+    // ================================================================
+    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
+    result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
+    
+    result = result.replace(/((?:<li>.*<\/li>\s*)+)/g, function(match) {
+        if (match.indexOf('</li>') !== -1) {
+            var hasNumbers = /<li>\d+\./.test(match);
+            if (hasNumbers) {
+                var cleaned = match.replace(/<li>\d+\.\s+/g, '<li>');
+                return '<ol>' + cleaned + '</ol>';
+            }
+            return '<ul>' + match + '</ul>';
+        }
+        return match;
     });
     
-    // 3.6 Заголовки (в начале строки)
-    escapedText = escapedText.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    escapedText = escapedText.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    escapedText = escapedText.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    // ================================================================
+    // ШАГ 8: РАЗДЕЛИТЕЛИ И ЦИТАТЫ
+    // ================================================================
+    result = result.replace(/^(---|\*\*\*|___)$/gm, '<hr>');
+    result = result.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
     
-    // 3.7 Заголовки в любом месте строки
-    escapedText = escapedText.replace(/###\s+([^\n<]+)/g, '<h3>$1</h3>');
-    escapedText = escapedText.replace(/##\s+([^\n<]+)/g, '<h2>$1</h2>');
-    escapedText = escapedText.replace(/#\s+([^\n<]+)/g, '<h1>$1</h1>');
-    
-    // 3.8 Маркированные списки: - пункт, * пункт
-    escapedText = escapedText.replace(/^- (.+)$/gm, '<li>$1</li>');
-    escapedText = escapedText.replace(/^\* (.+)$/gm, '<li>$1</li>');
-    // Обернуть последовательные <li> в <ul>
-    escapedText = escapedText.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
-    
-    // 3.9 Нумерованные списки: 1. пункт
-    escapedText = escapedText.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-    escapedText = escapedText.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ol>$1</ol>');
-    
-    // 3.10 Горизонтальные разделители: --- или ***
-    escapedText = escapedText.replace(/^(---|\*\*\*)$/gm, '<hr>');
-    
-    // 3.11 Цитаты: > текст
-    escapedText = escapedText.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-    
-    // 3.12 Ссылки: [текст](url) (ЭКРАНИРУЕМ URL)
-    escapedText = escapedText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, linkText, url) {
+    // ================================================================
+    // ШАГ 9: ССЫЛКИ [текст](url)
+    // ================================================================
+    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, linkText, url) {
         var lowerUrl = url.toLowerCase();
-        // Блокируем опасные схемы
         if (lowerUrl.indexOf('javascript:') === 0 || 
             lowerUrl.indexOf('data:') === 0 || 
             lowerUrl.indexOf('vbscript:') === 0) {
-            logDebug('[MARKDOWN] Blocked dangerous URL: ' + url.substring(0, 100));
             return linkText;
         }
         var safeUrl = escapeHtml(url);
@@ -4669,57 +4503,32 @@ function parseMessageText(text) {
         return '<a href="' + safeUrl + '"' + targetAttr + '>' + linkText + '</a>';
     });
     
-    logDebug('[MARKDOWN] Applied Markdown formatting');
+    // ================================================================
+    // ШАГ 10: ПРЕОБРАЗОВАНИЕ ПЕРЕНОСОВ
+    // ================================================================
+    var lines = result.split('\n');
+    var finalResult = [];
     
-    // ========== ФОРМАТИРОВАНИЕ ЦИТАТ ==========
-    // Разбиваем по \n (НЕ экранируем)
-    var lines = escapedText.split('\n');
-    var quoteLines = [];
-    var resultLines = [];
-    var inQuote = false;
-    var currentQuoteUuid = null;
-    
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        // Обработка цитат: > текст
-        if (line.match(/^>\s/) || line.match(/^»\s/)) {
-            var content = '';
-            if (line.match(/^>\s/)) content = line.substring(2);
-            else if (line.match(/^»\s/)) content = line.substring(2);
-            
-            content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            var uuidMatch = content.match(/\[msg:([a-f0-9\-]{36})\]/);
-            if (uuidMatch && !currentQuoteUuid) currentQuoteUuid = uuidMatch[1];
-            content = content.replace(/\[msg:[a-f0-9\-]{36}\]/g, '');
-            content = content.replace(/\s+/g, ' ').trim();
-            quoteLines.push(content);
-            inQuote = true;
+    for (var j = 0; j < lines.length; j++) {
+        var line = lines[j];
+        if (/^\s*<[a-z]/.test(line) || /^\s*<\/[a-z]/.test(line)) {
+            finalResult.push(line);
         } else {
-            if (inQuote && quoteLines.length > 0) {
-                var quoteHtml = '<div class="message-quote';
-                if (currentQuoteUuid && UUID_REGEX.test(currentQuoteUuid)) quoteHtml += ' clickable-quote" data-quote-uuid="' + encodeURIComponent(currentQuoteUuid) + '"';
-                else quoteHtml += '"';
-                quoteHtml += '><span style="font-size:10px; color:#6b7280; display:block; margin-bottom:4px;">📎 Цитата:</span>' + quoteLines.join('<br>') + '</div>';
-                resultLines.push(quoteHtml);
-                quoteLines = [];
-                inQuote = false;
-                currentQuoteUuid = null;
+            finalResult.push(line);
+            if (j < lines.length - 1) {
+                var nextLine = lines[j + 1];
+                if (!/^\s*<[a-z]/.test(nextLine) && !/^\s*<\/[a-z]/.test(nextLine)) {
+                    finalResult.push('<br>');
+                }
             }
-            resultLines.push(line);
         }
     }
-    if (quoteLines.length > 0) {
-        var quoteHtml = '<div class="message-quote';
-        if (currentQuoteUuid && UUID_REGEX.test(currentQuoteUuid)) quoteHtml += ' clickable-quote" data-quote-uuid="' + encodeURIComponent(currentQuoteUuid) + '"';
-        else quoteHtml += '"';
-        quoteHtml += '><span style="font-size:10px; color:#6b7280; display:block; margin-bottom:4px;">📎 Цитата:</span>' + quoteLines.join('<br>') + '</div>';
-        resultLines.push(quoteHtml);
-    }
     
-    // Соединяем обратно с <br>
-    return resultLines.join('<br>');
+    result = finalResult.join('');
+    
+    return result;
 }
-// ==================== BLOCK END: parseMessageText v12.0 ====================
+// ==================== BLOCK END: parseMessageText v14.0 ====================
 </script>
 
 <script nonce="<?= CSP_NONCE ?>">
@@ -12204,162 +12013,6 @@ function parseTaskDetailsLinks(text) {
 // ==================== BLOCK END: Helper functions for task details panel v1.0 ====================
 
 
-// ==================== BLOCK START: parseDescriptionLinks v8.0 (FIXED: links before markdown, lists preserved) ====================
-// ver.8.0 (2026-06-19) - ПОЛНОСТЬЮ ПЕРЕРАБОТАНА
-// - Исправлена обработка внешних ссылок: теперь обрабатываются ДО Markdown
-// - Это предотвращает интерпретацию _ и * в URL как Markdown-разметки
-// - Исправлена обработка списков: преобразование \n → <br> выполняется ПОСЛЕ Markdown
-// - Списки теперь правильно распознаются и отображаются
-// - Сохранена полная поддержка Markdown: жирный, курсив, зачеркивание, заголовки, списки, цитаты
-
-function parseDescriptionLinks(text) {
-    if (!text) return '';
-    
-    logDebug('[PARSE_DESCRIPTION_JS] v8.0 - FIXED: external links before markdown, lists preserved');
-    
-    function escapeHtml(str) {
-        if (!str) return '';
-        var div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
-    
-    var result = text;
-    
-    // ========== ШАГ 1: ВНЕШНИЕ ССЫЛКИ (ДО MARKDOWN) ==========
-    // Это предотвращает интерпретацию _ и * в URL как Markdown
-    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/gi;
-    result = result.replace(urlRegex, function(url) {
-        var lowerUrl = url.toLowerCase();
-        if (lowerUrl.indexOf('javascript:') === 0 || 
-            lowerUrl.indexOf('data:') === 0 || 
-            lowerUrl.indexOf('vbscript:') === 0) {
-            return url;
-        }
-        var safeUrl = escapeHtml(url);
-        var isTelegram = (lowerUrl.indexOf('tg://') === 0 || lowerUrl.indexOf('telegram://') === 0);
-        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
-        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
-        var displayText = url;
-        if (displayText.length > 80) {
-            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
-        }
-        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + displayText + '</a>';
-    });
-    
-    // ========== ШАГ 2: БЛОКИ КОДА (ЭКРАНИРУЕМ) ==========
-    result = result.replace(/```([a-z]*)\n([\s\S]*?)\n```/g, function(match, lang, code) {
-        var langAttr = lang ? ' class="language-' + lang + '"' : '';
-        return '<pre><code' + langAttr + '>' + escapeHtml(code) + '</code></pre>';
-    });
-    
-    result = result.replace(/``\n([\s\S]*?)\n``/g, function(match, code) {
-        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
-    });
-    
-    result = result.replace(/`\n([\s\S]*?)\n`/g, function(match, code) {
-        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
-    });
-    
-    // Инлайн-код
-    result = result.replace(/(?<!<code>)(?<!<pre>)(?<!<\/code>)(?<!<\/pre>)`([^`\n]+)`(?!<\/code>)(?!<\/pre>)/g, function(match, code) {
-        return '<code>' + escapeHtml(code) + '</code>';
-    });
-    
-    // ========== ШАГ 3: MARKDOWN ==========
-    
-    // Жирный
-    result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    result = result.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-    
-    // Курсив
-    result = result.replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>');
-    result = result.replace(/_(.+?)_/g, '<em>$1</em>');
-    
-    // Зачеркивание
-    result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    
-    // ========== СПИСКИ (ДО ПРЕОБРАЗОВАНИЯ ПЕРЕНОСОВ) ==========
-    // Нумерованные списки: 1. текст
-    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
-    // Маркированные списки: - текст или * текст
-    result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
-    
-    // Оборачиваем последовательные <li> в <ul>/<ol>
-    result = result.replace(/((?:<li>.*<\/li>\s*)+)/g, function(match) {
-        // Проверяем, содержит ли match нумерованный список
-        if (match.indexOf('</li>') !== -1) {
-            // Простая проверка: если есть цифры в начале строк, то это ol
-            var hasNumbers = /<li>\d+\./.test(match);
-            if (hasNumbers) {
-                // Удаляем цифры из <li> (они уже есть в тексте)
-                var cleaned = match.replace(/<li>\d+\.\s+/g, '<li>');
-                return '<ol>' + cleaned + '</ol>';
-            }
-            return '<ul>' + match + '</ul>';
-        }
-        return match;
-    });
-    
-    // ========== ЗАГОЛОВКИ ==========
-    result = result.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    result = result.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    result = result.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-    
-    result = result.replace(/###\s+([^\n<]+)/g, '<h3>$1</h3>');
-    result = result.replace(/##\s+([^\n<]+)/g, '<h2>$1</h2>');
-    result = result.replace(/#\s+([^\n<]+)/g, '<h1>$1</h1>');
-    
-    // ========== РАЗДЕЛИТЕЛИ ==========
-    result = result.replace(/^(---|\*\*\*|___)$/gm, '<hr>');
-    
-    // ========== ЦИТАТЫ ==========
-    result = result.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-    
-    // ========== ССЫЛКИ [текст](url) ==========
-    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, linkText, url) {
-        var lowerUrl = url.toLowerCase();
-        if (lowerUrl.indexOf('javascript:') === 0 || 
-            lowerUrl.indexOf('data:') === 0 || 
-            lowerUrl.indexOf('vbscript:') === 0) {
-            return linkText;
-        }
-        var safeUrl = escapeHtml(url);
-        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
-        return '<a href="' + safeUrl + '"' + targetAttr + '>' + linkText + '</a>';
-    });
-    
-    // ========== ШАГ 4: ПРЕОБРАЗОВАНИЕ ПЕРЕНОСОВ СТРОК (ПОСЛЕ MARKDOWN) ==========
-    // Разбиваем по строкам, но сохраняем HTML-теги
-    var lines = result.split('\n');
-    var finalResult = [];
-    
-    for (var j = 0; j < lines.length; j++) {
-        var line = lines[j];
-        // Если строка начинается с < и это HTML-тег, оставляем как есть
-        if (/^\s*<[a-z]/.test(line) || /^\s*<\/[a-z]/.test(line)) {
-            finalResult.push(line);
-        } else {
-            // Иначе добавляем <br> (но не в конце, если следующий элемент тоже HTML)
-            finalResult.push(line);
-            if (j < lines.length - 1) {
-                // Проверяем следующую строку
-                var nextLine = lines[j + 1];
-                if (!/^\s*<[a-z]/.test(nextLine) && !/^\s*<\/[a-z]/.test(nextLine)) {
-                    finalResult.push('<br>');
-                }
-            }
-        }
-    }
-    
-    result = finalResult.join('');
-    
-    logDebug('[PARSE_DESCRIPTION_JS] Final output length: ' + result.length);
-    return result;
-}
-// ==================== BLOCK END: parseDescriptionLinks v8.0 ====================
-
-
 // ==================== BLOCK START: renderTaskDetails v2.6 (with parent display fix) ====================
 // ver.2.5 (2026-06-15) - ФИКСАЦИЯ КНОПОК ВНИЗУ
 // ver.2.6 (2026-06-17) - ИСПРАВЛЕНО ОТОБРАЖЕНИЕ РОДИТЕЛЯ В РЕЖИМЕ ПРОСМОТРА
@@ -12376,7 +12029,7 @@ function renderTaskDetails(task) {
     var descrHtml = '';
     var descrText = task.descr || '';
     if (descrText.trim() !== '') {
-        descrHtml = '<div class="task-details-description">' + parseDescriptionLinks(descrText) + '</div>';
+        descrHtml = '<div class="task-details-description">' + parseMarkdownToHtml(descrText) + '</div>';
     } else {
         descrHtml = '<div class="task-details-description-empty">Нет описания</div>';
     }

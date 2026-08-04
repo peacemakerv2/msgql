@@ -1469,6 +1469,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && isset($_
                 log_debug("[GET_TASK_FILES] Found " . count($response['files']) . " files for task {$task_uuid}");
             }
         }
+
+
+        // Открепление файла от задачи
+        elseif ($action === 'detach_file_from_task') {
+            $task_uuid = $_POST['task_uuid'] ?? '';
+            $file_uuid = $_POST['file_uuid'] ?? '';
+            
+            if (empty($task_uuid) || empty($file_uuid)) {
+                $response['error'] = 'Не указаны обязательные параметры';
+            } elseif (!msgql_can_edit_task($current_user_uuid, $task_uuid)) {
+                $response['error'] = 'Нет прав на редактирование этой задачи';
+            } else {
+                // Проверяем существование связи
+                $check = $db->prepare("SELECT 1 FROM task_files WHERE task_uuid = ? AND file_uuid = ?");
+                $check->bind_param("ss", $task_uuid, $file_uuid);
+                $check->execute();
+                $exists = $check->get_result()->num_rows > 0;
+                $check->close();
+                
+                if (!$exists) {
+                    $response['error'] = 'Файл не прикреплён к этой задаче';
+                } else {
+                    // Удаляем связь
+                    $stmt = $db->prepare("DELETE FROM task_files WHERE task_uuid = ? AND file_uuid = ?");
+                    $stmt->bind_param("ss", $task_uuid, $file_uuid);
+                    $success = $stmt->execute();
+                    $stmt->close();
+                    
+                    if ($success) {
+                        // Проверяем, есть ли другие ссылки на файл
+                        $check_refs = $db->prepare("
+                            SELECT COUNT(*) as cnt FROM task_files WHERE file_uuid = ?
+                            UNION ALL
+                            SELECT COUNT(*) as cnt FROM message_files WHERE file_uuid = ?
+                        ");
+                        $check_refs->bind_param("ss", $file_uuid, $file_uuid);
+                        $check_refs->execute();
+                        $refs_result = $check_refs->get_result();
+                        $total_refs = 0;
+                        while ($row = $refs_result->fetch_assoc()) {
+                            $total_refs += (int)$row['cnt'];
+                        }
+                        $check_refs->close();
+                        
+                        // Если ссылок нет - удаляем файл с диска
+                        if ($total_refs == 0) {
+                            $file_stmt = $db->prepare("SELECT storage_name FROM files WHERE uuid = ?");
+                            $file_stmt->bind_param("s", $file_uuid);
+                            $file_stmt->execute();
+                            $file_row = $file_stmt->get_result()->fetch_assoc();
+                            $file_stmt->close();
+                            
+                            if ($file_row) {
+                                $file_path = __DIR__ . '/uploads/tasks/' . $file_row['storage_name'];
+                                if (file_exists($file_path)) {
+                                    @unlink($file_path);
+                                    log_debug("[DETACH_FILE] Deleted file: {$file_path}");
+                                }
+                            }
+                            
+                            $del_file = $db->prepare("DELETE FROM files WHERE uuid = ?");
+                            $del_file->bind_param("s", $file_uuid);
+                            $del_file->execute();
+                            $del_file->close();
+                            log_debug("[DETACH_FILE] Deleted file record: {$file_uuid}");
+                        }
+                        
+                        $response['success'] = true;
+                        $response['files'] = get_task_files($task_uuid, $db);
+                        log_debug("[DETACH_FILE] File detached from task: {$file_uuid}");
+                    } else {
+                        $response['error'] = 'Ошибка открепления файла';
+                    }
+                }
+            }
+        }
+        
         
         // Загрузка файла к задаче
         // ==================== BLOCK START: upload_task_file v2.0 (TOCTOU fix) ====================
@@ -2765,16 +2842,48 @@ function parseDescriptionLinks($text) {
     // Разделители
     $result = preg_replace('/^(---|\*\*\*|___)$/m', '<hr>', $result);
     
-    // Ссылки (ЭКРАНИРУЕМ URL)
+    // ========== ССЫЛКИ (ИСПРАВЛЕННАЯ ВЕРСИЯ) ==========
+    // v8.1: Правильный парсинг URL с параметрами запроса
+    
+    // Сначала обрабатываем Markdown-ссылки: [текст](url)
     $result = preg_replace_callback('/\[([^\]]+)\]\(([^)]+)\)/', function($m) {
-        return '<a href="' . htmlspecialchars($m[2], ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener noreferrer">' . $m[1] . '</a>';
+        $url = $m[2];
+        $lowerUrl = strtolower($url);
+        if (strpos($lowerUrl, 'javascript:') === 0 || 
+            strpos($lowerUrl, 'data:') === 0 || 
+            strpos($lowerUrl, 'vbscript:') === 0) {
+            return $m[1];
+        }
+        $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $targetAttr = (strpos($lowerUrl, 'mailto:') === 0 || strpos($lowerUrl, 'tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return '<a href="' . $safeUrl . '"' . $targetAttr . '>' . $m[1] . '</a>';
     }, $result);
     
-    // Внешние ссылки (ЭКРАНИРУЕМ URL)
-    $urlRegex = '/(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/i';
+    // Обычные URL - сохраняем полные URL с параметрами
+    // Используем более широкий набор символов для URL
+    $urlRegex = '/(?:https?:\/\/|ftp:\/\/|ws:\/\/|wss:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~!$&\'()*+,;=:@\/?%#\[\]]+(?=[\s<>\[\]\(\)\{\}]|$)/i';
     $result = preg_replace_callback($urlRegex, function($m) {
-        return '<a href="' . htmlspecialchars($m[0], ENT_QUOTES, 'UTF-8') . '" class="external-link" target="_blank" rel="noopener noreferrer">' . $m[0] . '</a>';
+        $url = $m[0];
+        $lowerUrl = strtolower($url);
+        if (strpos($lowerUrl, 'javascript:') === 0 || 
+            strpos($lowerUrl, 'data:') === 0 || 
+            strpos($lowerUrl, 'vbscript:') === 0) {
+            return $url;
+        }
+        $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $isTelegram = (strpos($lowerUrl, 'tg://') === 0 || strpos($lowerUrl, 'telegram://') === 0);
+        $linkClass = $isTelegram ? 'external-link telegram-link' : 'external-link';
+        $targetAttr = (strpos($lowerUrl, 'mailto:') === 0 || strpos($lowerUrl, 'tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        // Не обрезаем URL, показываем полностью
+        $displayText = $url;
+        if (strlen($displayText) > 80) {
+            $displayText = substr($displayText, 0, 70) . '…' . substr($displayText, -10);
+        }
+        return '<a href="' . $safeUrl . '" class="' . $linkClass . '"' . $targetAttr . '>' . $displayText . '</a>';
     }, $result);
+    
+    // Второй проход: разделяем слипшиеся URL
+    $result = preg_replace('/(<\/a>)(<a\s)/', '$1 $2', $result);
     
     // Переносы строк
     $result = nl2br($result);
@@ -2814,8 +2923,16 @@ if (!$selected_project_for_highlight && $default_project_uuid) {
 ?>
 <script nonce="<?= CSP_NONCE ?>">
     window.currentUserUuid = '<?= htmlspecialchars($current_user_uuid, ENT_QUOTES) ?>';
+    // ========== ПЕРЕДАЕМ ПРОЕКТЫ В JS ==========
+    window.projectsData = <?= json_encode($projects, JSON_UNESCAPED_UNICODE) ?>;
+    window.selectedTaskUuid = '<?= htmlspecialchars($selected_task_uuid, ENT_QUOTES) ?>';
+    // ========== КОНЕЦ ==========
     if (typeof logDebug === 'function') {
         logDebug('[INIT] User UUID for filter settings:', window.currentUserUuid);
+        logDebug('[INIT] Projects loaded:', window.projectsData ? window.projectsData.length : 0);
+        if (window.selectedTaskUuid) {
+            logDebug('[INIT] Selected task UUID:', window.selectedTaskUuid);
+        }
     }
 </script>
 <?php
@@ -4062,170 +4179,6 @@ function restoreHighlightAfterRender() {
 
 function escapeHtml(text) { if (!text) return ''; var div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
 
-function parseDescriptionLinks(text) {
-    if (!text) return '';
-    
-    logDebug('[PARSE_DESCRIPTION_JS] v7.1 - FIXED list rendering');
-    
-    function escapeHtml(str) {
-        if (!str) return '';
-        var div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
-    
-    var result = text;
-    
-    // ========== БЛОКИ КОДА (ЭКРАНИРУЕМ) ==========
-    result = result.replace(/```([a-z]*)\n([\s\S]*?)\n```/g, function(match, lang, code) {
-        var langAttr = lang ? ' class="language-' + lang + '"' : '';
-        return '<pre><code' + langAttr + '>' + escapeHtml(code) + '</code></pre>';
-    });
-    
-    result = result.replace(/``\n([\s\S]*?)\n``/g, function(match, code) {
-        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
-    });
-    
-    result = result.replace(/`\n([\s\S]*?)\n`/g, function(match, code) {
-        return '<pre><code>' + escapeHtml(code) + '</code></pre>';
-    });
-    
-    // Инлайн-код
-    result = result.replace(/(?<!<code>)(?<!<pre>)(?<!<\/code>)(?<!<\/pre>)`([^`\n]+)`(?!<\/code>)(?!<\/pre>)/g, function(match, code) {
-        return '<code>' + escapeHtml(code) + '</code>';
-    });
-    
-    // ========== MARKDOWN ==========
-    
-    // Жирный
-    result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    result = result.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-    
-    // Курсив
-    result = result.replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>');
-    result = result.replace(/_(.+?)_/g, '<em>$1</em>');
-    
-    // Зачеркивание
-    result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    
-    // ========== СПИСКИ (ДО ПРЕОБРАЗОВАНИЯ ПЕРЕНОСОВ) ==========
-    // Нумерованные списки: 1. текст
-    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<li>$2</li>');
-    // Маркированные списки: - текст или * текст
-    result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
-    
-    // Оборачиваем последовательные <li> в <ul>/<ol>
-    // Сначала нумерованные
-    result = result.replace(/((?:<li>.*<\/li>\s*)+)/g, function(match) {
-        // Проверяем, содержит ли match нумерованный список
-        if (match.indexOf('</li>') !== -1) {
-            // Простая проверка: если есть цифры в начале строк, то это ol
-            var hasNumbers = /<li>\d+\./.test(match);
-            if (hasNumbers) {
-                // Удаляем цифры из <li> (они уже есть в тексте)
-                var cleaned = match.replace(/<li>\d+\.\s+/g, '<li>');
-                return '<ol>' + cleaned + '</ol>';
-            }
-            return '<ul>' + match + '</ul>';
-        }
-        return match;
-    });
-    
-    // ========== ЗАГОЛОВКИ ==========
-    result = result.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    result = result.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    result = result.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-    
-    result = result.replace(/###\s+([^\n<]+)/g, '<h3>$1</h3>');
-    result = result.replace(/##\s+([^\n<]+)/g, '<h2>$1</h2>');
-    result = result.replace(/#\s+([^\n<]+)/g, '<h1>$1</h1>');
-    
-    // ========== РАЗДЕЛИТЕЛИ ==========
-    result = result.replace(/^(---|\*\*\*|___)$/gm, '<hr>');
-    
-    // ========== ЦИТАТЫ ==========
-    result = result.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-    
-    // ========== ССЫЛКИ ==========
-    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, linkText, url) {
-        var lowerUrl = url.toLowerCase();
-        if (lowerUrl.indexOf('javascript:') === 0 || 
-            lowerUrl.indexOf('data:') === 0 || 
-            lowerUrl.indexOf('vbscript:') === 0) {
-            return linkText;
-        }
-        var safeUrl = escapeHtml(url);
-        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
-        return '<a href="' + safeUrl + '"' + targetAttr + '>' + linkText + '</a>';
-    });
-    
-    // Внешние ссылки
-    var urlRegex = /(?:https?:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|ftp:\/\/|ws:\/\/|wss:\/\/|magnet:|skype:|viber:|whatsapp:|signal:)[^\s<>\[\]\(\)\{\}]+/gi;
-    result = result.replace(urlRegex, function(url) {
-        var lowerUrl = url.toLowerCase();
-        if (lowerUrl.indexOf('javascript:') === 0 || 
-            lowerUrl.indexOf('data:') === 0 || 
-            lowerUrl.indexOf('vbscript:') === 0) {
-            return url;
-        }
-        var safeUrl = escapeHtml(url);
-        var isTelegram = (lowerUrl.indexOf('tg://') === 0 || lowerUrl.indexOf('telegram://') === 0);
-        var linkClass = isTelegram ? 'external-link telegram-link' : 'external-link';
-        var targetAttr = (lowerUrl.indexOf('mailto:') === 0 || lowerUrl.indexOf('tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
-        var displayText = url;
-        if (displayText.length > 80) {
-            displayText = displayText.substring(0, 70) + '…' + displayText.substring(displayText.length - 10);
-        }
-        return '<a href="' + safeUrl + '" class="' + linkClass + '"' + targetAttr + '>' + displayText + '</a>';
-    });
-    
-    // ========== ПРЕОБРАЗОВАНИЕ ПЕРЕНОСОВ СТРОК (ТОЛЬКО ОСТАВШИЕСЯ) ==========
-    // Разбиваем по строкам, но сохраняем HTML-теги
-    var lines = result.split('\n');
-    var processedLines = [];
-    
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        // Пропускаем строки, которые уже являются HTML-тегами (содержат <...>)
-        if (/^<[a-z]/.test(line.trim())) {
-            processedLines.push(line);
-        } else {
-            // Обычный текст - заменяем перенос на <br>
-            processedLines.push(line);
-        }
-    }
-    
-    // Собираем обратно с <br> между строками, но не внутри HTML-блоков
-    result = processedLines.join('\n');
-    
-    // Финальное преобразование: все \n, которые не внутри HTML-тегов, заменяем на <br>
-    // Простой способ: разделяем по строкам, смотрим, не является ли строка HTML-тегом
-    var finalLines = result.split('\n');
-    var finalResult = [];
-    
-    for (var j = 0; j < finalLines.length; j++) {
-        var line = finalLines[j];
-        // Если строка начинается с < и это HTML-тег, оставляем как есть
-        if (/^\s*<[a-z]/.test(line) || /^\s*<\/[a-z]/.test(line)) {
-            finalResult.push(line);
-        } else {
-            // Иначе добавляем <br> (но не в конце, если следующий элемент тоже HTML)
-            finalResult.push(line);
-            if (j < finalLines.length - 1) {
-                // Проверяем следующую строку
-                var nextLine = finalLines[j + 1];
-                if (!/^\s*<[a-z]/.test(nextLine) && !/^\s*<\/[a-z]/.test(nextLine)) {
-                    finalResult.push('<br>');
-                }
-            }
-        }
-    }
-    
-    result = finalResult.join('');
-    
-    logDebug('[PARSE_DESCRIPTION_JS] Final output length: ' + result.length);
-    return result;
-}
 
 function formatDate(ts) {
     if (!ts || ts === null || ts === 0) return '';
@@ -5607,16 +5560,20 @@ function copyTaskLink(taskUuid, taskTitle) {
 
 // ========== ОСНОВНАЯ ЛОГИКА ЗАГРУЗКИ ==========
 
-// ==================== BLOCK START: selectProject v4.3 (with loading indicator auto-hide) ====================
+// ==================== BLOCK START: selectProject v5.0 (FIXED with task URL handling) ====================
 // ver.4.0 - Базовая версия
 // ver.4.2 (2026-06-05) - ДОБАВЛЕНО УПРАВЛЕНИЕ ИНДИКАТОРОМ ЗАГРУЗКИ
 // ver.4.3 (2026-06-05) - ИСПРАВЛЕНА ПРОБЛЕМА: индикатор скрывается при ошибках
 // ver.4.4 (2026-06-16) - ДОБАВЛЕН СБРОС БЕЙДЖА ПРИ ВЫБОРЕ ПРОЕКТА
-// - При выборе проекта скрываем красный бейдж с уведомлениями
-// - Отправляем запрос на сервер для пометки уведомлений проекта как прочитанных
+// ver.5.0 (2026-06-27) - ИСПРАВЛЕНА ОБРАБОТКА ПРЯМОЙ ССЫЛКИ НА ЗАДАЧУ
+// - currentProjectUuid устанавливается СРАЗУ
+// - Если есть задача из URL - загружается страница с ней
+// - Сохранена полная совместимость с фильтрацией
 
 function selectProject(uuid) {
-    logDebug('[SELECT_PROJECT] Selecting project:', uuid);
+    logDebug('[SELECT_PROJECT] v5.0 Selecting project:', uuid);
+    
+    // ========== ВАЖНО: Устанавливаем currentProjectUuid СРАЗУ ==========
     currentProjectUuid = uuid;
     
     // Показываем индикатор загрузки при выборе проекта
@@ -5625,7 +5582,6 @@ function selectProject(uuid) {
     }
     
     // ========== V4.4: СБРАСЫВАЕМ БЕЙДЖ ПРИ ВЫБОРЕ ПРОЕКТА ==========
-    // Скрываем бейдж на карточке проекта (оптимистичное обновление)
     var badge = document.getElementById('project-badge-' + uuid);
     if (badge) {
         badge.style.display = 'none';
@@ -5675,12 +5631,93 @@ function selectProject(uuid) {
     // Загрузка пользователей для фильтра
     loadProjectUsersForFilter(uuid);
     
-    resetFiltersAndLoad();
+    // ========== V5.0: ОБРАБОТКА ПРЯМОЙ ССЫЛКИ НА ЗАДАЧУ ==========
+    // Если есть задача из URL, загружаем страницу с ней
+    if (window.selectedTaskUuid) {
+        logDebug('[SELECT_PROJECT] v5.0 Task from URL detected:', window.selectedTaskUuid);
+        
+        // Получаем информацию о задаче, чтобы узнать её страницу
+        var taskFormData = new URLSearchParams();
+        taskFormData.append('action', 'get_task_page_info');
+        taskFormData.append('task_uuid', window.selectedTaskUuid);
+        taskFormData.append('project_uuid', uuid);
+        taskFormData.append('per_page', currentPerPage);
+        taskFormData.append('sort_by', currentSortBy);
+        taskFormData.append('sort_dir', currentSortDir);
+        taskFormData.append('filter_statuses', JSON.stringify(currentFilterStatuses));
+        taskFormData.append('filter_assigned', JSON.stringify(currentFilterAssigned));
+        taskFormData.append('search', currentSearch);
+        taskFormData.append('ajax_mode', '1');
+        addCsrfToUrlParams(taskFormData);
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: taskFormData
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success && data.page) {
+                logDebug('[SELECT_PROJECT] v5.0 Task found on page:', data.page);
+                currentTaskPage = data.page;
+                // Загружаем нужную страницу
+                loadProjectTasks(false);
+                
+                // После загрузки находим и подсвечиваем задачу
+                setTimeout(function() {
+                    // Получаем цепочку родителей через get_task_info
+                    var chainFormData = new URLSearchParams();
+                    chainFormData.append('action', 'get_task_info');
+                    chainFormData.append('task_uuid', window.selectedTaskUuid);
+                    chainFormData.append('ajax_mode', '1');
+                    addCsrfToUrlParams(chainFormData);
+                    
+                    fetch(window.location.href, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: chainFormData
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(taskData) {
+                        if (taskData.success && taskData.task) {
+                            var parentChain = taskData.task.parent_chain || [];
+                            if (parentChain.length > 0) {
+                                logDebug('[SELECT_PROJECT] v5.0 Expanding parents:', parentChain);
+                                expandParentsChainInDom(parentChain, window.selectedTaskUuid, function() {
+                                    setTimeout(function() {
+                                        findAndHighlightTask(window.selectedTaskUuid, 30, 0);
+                                    }, 500);
+                                });
+                            } else {
+                                findAndHighlightTask(window.selectedTaskUuid, 30, 0);
+                            }
+                        } else {
+                            findAndHighlightTask(window.selectedTaskUuid, 30, 0);
+                        }
+                    })
+                    .catch(function(err) {
+                        logError('[SELECT_PROJECT] v5.0 Error getting parent chain:', err);
+                        findAndHighlightTask(window.selectedTaskUuid, 30, 0);
+                    });
+                }, 1500);
+            } else {
+                logDebug('[SELECT_PROJECT] v5.0 Task page info not found, loading default');
+                resetFiltersAndLoad();
+            }
+        })
+        .catch(function(err) {
+            logError('[SELECT_PROJECT] v5.0 Error getting task page:', err);
+            resetFiltersAndLoad();
+        });
+    } else {
+        // Обычная загрузка без задачи из URL
+        resetFiltersAndLoad();
+    }
+    // ========== КОНЕЦ V5.0 ==========
     
     // v4.3: Таймер безопасности - скрыть индикатор через 8 секунд если загрузка не завершилась
     setTimeout(function() {
         if (typeof window.setPageLoadStatus === 'function') {
-            // Проверяем, не скрыт ли уже индикатор
             var indicator = document.getElementById('page-load-indicator');
             if (indicator && indicator.style.opacity !== '0') {
                 logDebug('[SELECT_PROJECT] Safety timeout: hiding indicator');
@@ -5694,7 +5731,7 @@ function selectProject(uuid) {
         if (tasksArea) tasksArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 300);
 }
-// ==================== BLOCK END: selectProject v4.4 ====================
+// ==================== BLOCK END: selectProject v5.0 ====================
 
 function resetFiltersAndLoad() {
     logDebug('[RESET_FILTERS] Resetting all filters');
@@ -6982,13 +7019,14 @@ function ensureTaskVisible(taskUuid, callback) {
 // - Исправлен порядок вызова: сначала выбор проекта, потом загрузка задач, потом раскрытие
 // - Добавлены задержки для гарантированной загрузки DOM
 // - Улучшено логирование
+// ver.5.4 (2026-06-27) - ДОБАВЛЕНА ОБРАБОТКА per_page ИЗ URL ДЛЯ ПРЯМОЙ ССЫЛКИ
 
 document.addEventListener('DOMContentLoaded', function() {
     var urlParams = new URLSearchParams(window.location.search);
     var taskUuid = urlParams.get('task');
     var projectUuid = urlParams.get('project');
     
-    logDebug('[INIT] === START INITIALIZATION v5.3 ===');
+    logDebug('[INIT] === START INITIALIZATION v5.4 ===');
     logDebug('[INIT] URL parameters - task:', taskUuid, 'project:', projectUuid);
     
     var hasUrlTaskOrProject = !!(taskUuid || projectUuid);
@@ -7021,7 +7059,28 @@ document.addEventListener('DOMContentLoaded', function() {
     updateStatusFilter();
     updateAssigneeFilter();
     
-
+    // ================================================================
+    // ========== V5.4: ОБРАБОТКА per_page ИЗ URL ==========
+    // ================================================================
+    // Если в URL есть task и нет per_page, устанавливаем большое значение,
+    // чтобы задача точно попала на страницу
+    if (window.selectedTaskUuid) {
+        var perPageParam = urlParams.get('per_page');
+        var pageParam = urlParams.get('page');
+        
+        if (!perPageParam && !pageParam) {
+            // Устанавливаем 100 задач на страницу
+            currentPerPage = 100;
+            var perPageSelect = document.getElementById('per-page');
+            if (perPageSelect) {
+                perPageSelect.value = '100';
+            }
+            localStorage.setItem('tasks_per_page', '100');
+            logDebug('[INIT] v5.4 Set per_page to 100 for task URL');
+        }
+    }
+    // ========== КОНЕЦ БЛОКА V5.4 ==========
+    // ================================================================
     
     // ========== ОБРАБОТЧИК ЗАДАЧИ ИЗ URL ==========
     if (taskUuid) {
@@ -7116,7 +7175,7 @@ window.addEventListener('popstate', function(event) {
         findAndHighlightTask(taskUuid, 50, 0);
     }
 });
-// ==================== BLOCK END: Final initialization v5.3 ====================
+// ==================== BLOCK END: Final initialization v5.4 ====================
 
 
 // ==================== BLOCK START: ensureSubtaskHandlers v1.0 ====================

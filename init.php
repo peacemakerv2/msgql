@@ -156,3 +156,125 @@ if (!$is_ajax_request && !$is_download_script) {
     }
 }
 
+//общие функции
+// ==================== BLOCK START: Unified parser function ====================
+// ver.1.0 (2026-06-27) - ЕДИНАЯ ФУНКЦИЯ ДЛЯ ВСЕГО ПРОЕКТА
+// - Используется в projects.php и messages.php
+// - Ссылки обрабатываются ДО Markdown
+// - Символы _ в URL не ломаются
+
+function parseMarkdownToHtml($text) {
+    if (empty($text)) return '';
+    
+    // Сначала обрабатываем ссылки
+    $text = preg_replace_callback(
+        '/(?:https?:\/\/|ftp:\/\/|ws:\/\/|wss:\/\/|tg:\/\/|telegram:\/\/|mailto:|tel:|magnet:|skype:|viber:|whatsapp:|signal:)[a-zA-Z0-9\-._~:\/?#\[\]@!$&\'()*+,;=%]+/i',
+        function($matches) {
+            $url = $matches[0];
+            $lowerUrl = strtolower($url);
+            
+            if (strpos($lowerUrl, 'javascript:') === 0 || 
+                strpos($lowerUrl, 'data:') === 0 || 
+                strpos($lowerUrl, 'vbscript:') === 0) {
+                return $url;
+            }
+            
+            $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+            $isTelegram = (strpos($lowerUrl, 'tg://') === 0 || strpos($lowerUrl, 'telegram://') === 0);
+            $linkClass = $isTelegram ? 'external-link telegram-link' : 'external-link';
+            $targetAttr = (strpos($lowerUrl, 'mailto:') === 0 || strpos($lowerUrl, 'tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+            
+            $displayText = $url;
+            if (strlen($displayText) > 80) {
+                $displayText = substr($displayText, 0, 70) . '…' . substr($displayText, -10);
+            }
+            
+            return '<a href="' . $safeUrl . '" class="' . $linkClass . '"' . $targetAttr . '>' . $displayText . '</a>';
+        },
+        $text
+    );
+    
+    // Затем применяем Markdown
+    $processed = $text;
+    
+    // Блоки кода
+    $processed = preg_replace_callback('/```([a-z]*)\n(.*?)\n```/s', function($matches) {
+        $lang = htmlspecialchars($matches[1], ENT_QUOTES, 'UTF-8');
+        $code = htmlspecialchars($matches[2], ENT_QUOTES, 'UTF-8');
+        $class = $lang ? ' class="language-' . $lang . '"' : '';
+        return '<pre><code' . $class . '>' . $code . '</code></pre>';
+    }, $processed);
+    
+    // Инлайн-код
+    $processed = preg_replace_callback('/`([^`]+)`/', function($matches) {
+        return '<code>' . htmlspecialchars($matches[1], ENT_QUOTES, 'UTF-8') . '</code>';
+    }, $processed);
+    
+    // Ссылки [текст](url)
+    $processed = preg_replace_callback('/\[([^\]]+)\]\(([^)]+)\)/', function($matches) {
+        $linkText = $matches[1];
+        $url = $matches[2];
+        $lowerUrl = strtolower($url);
+        
+        if (strpos($lowerUrl, 'javascript:') === 0 || 
+            strpos($lowerUrl, 'data:') === 0 || 
+            strpos($lowerUrl, 'vbscript:') === 0) {
+            return $linkText;
+        }
+        
+        $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $safeText = htmlspecialchars($linkText, ENT_QUOTES, 'UTF-8');
+        $targetAttr = (strpos($lowerUrl, 'mailto:') === 0 || strpos($lowerUrl, 'tel:') === 0) ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return '<a href="' . $safeUrl . '"' . $targetAttr . '>' . $safeText . '</a>';
+    }, $processed);
+    
+    // Жирный, курсив, зачеркивание
+    $processed = preg_replace('/\*\*(.+?)\*\*/', '<strong>$1</strong>', $processed);
+    $processed = preg_replace('/__([^_]+)__/', '<strong>$1</strong>', $processed);
+    $processed = preg_replace('/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/', '<em>$1</em>', $processed);
+    // ВАЖНО: НЕ парсим _текст_ в <em>, т.к. это ломает ссылки!
+    // $processed = preg_replace('/_(.+?)_/', '<em>$1</em>', $processed);
+    $processed = preg_replace('/~~(.+?)~~/', '<del>$1</del>', $processed);
+    
+    // Заголовки
+    $processed = preg_replace('/^### (.+)$/m', '<h3>$1</h3>', $processed);
+    $processed = preg_replace('/^## (.+)$/m', '<h2>$1</h2>', $processed);
+    $processed = preg_replace('/^# (.+)$/m', '<h1>$1</h1>', $processed);
+    
+    $processed = preg_replace('/###\s+([^\n<]+)/', '<h3>$1</h3>', $processed);
+    $processed = preg_replace('/##\s+([^\n<]+)/', '<h2>$1</h2>', $processed);
+    $processed = preg_replace('/#\s+([^\n<]+)/', '<h1>$1</h1>', $processed);
+    
+    // Списки
+    $processed = preg_replace('/^- (.+)$/m', '<li>$1</li>', $processed);
+    $processed = preg_replace('/^\* (.+)$/m', '<li>$1</li>', $processed);
+    $processed = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ul>$1</ul>', $processed);
+    $processed = preg_replace('/^\d+\. (.+)$/m', '<li>$1</li>', $processed);
+    $processed = preg_replace('/((?:<li>.*<\/li>\s*)+)/', '<ol>$1</ol>', $processed);
+    
+    // Разделители и цитаты
+    $processed = preg_replace('/^(---|\*\*\*)$/m', '<hr>', $processed);
+    $processed = preg_replace('/^> (.+)$/m', '<blockquote>$1</blockquote>', $processed);
+    
+    // Преобразование переносов
+    $lines = explode("\n", $processed);
+    $finalResult = [];
+    foreach ($lines as $line) {
+        if (preg_match('/^\s*<[a-z]/', $line) || preg_match('/^\s*<\/[a-z]/', $line)) {
+            $finalResult[] = $line;
+        } else {
+            $finalResult[] = $line . '<br>';
+        }
+    }
+    $processed = implode('', $finalResult);
+    
+    return $processed;
+}
+
+// Алиас для обратной совместимости
+if (!function_exists('parseDescriptionLinks')) {
+    function parseDescriptionLinks($text) {
+        return parseMarkdownToHtml($text);
+    }
+}
+// ==================== BLOCK END: Unified parser function ====================
