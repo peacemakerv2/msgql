@@ -1,0 +1,398 @@
+/**
+ * admin.css
+ * Version: 1.0.0
+ * Changelog:
+ * - 1.0.0 (2026-10-14): Initial split from admin.php. Extracted all admin panel styles:
+ *                       tabs, users table, permissions, subscribers, modals, responsive rules.
+ */
+
+/* ==================== ТАБЫ АДМИНКИ ==================== */
+.admin-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 8px;
+}
+.admin-tabs .tab {
+    padding: 10px 20px;
+    border-radius: 10px 10px 0 0;
+    color: rgba(233,238,252,0.7);
+    text-decoration: none;
+    transition: all 0.2s;
+}
+.admin-tabs .tab:hover {
+    background: rgba(79,124,255,0.1);
+    color: #e9eefc;
+}
+.admin-tabs .tab.active {
+    background: #4f7cff;
+    color: white;
+}
+
+/* ==================== ТАБЛИЦА ПОЛЬЗОВАТЕЛЕЙ ==================== */
+.users-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.users-table th,
+.users-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.users-table th {
+    color: rgba(233,238,252,0.6);
+    font-weight: 500;
+}
+.users-table td {
+    color: rgba(233,238,252,0.9);
+}
+.users-table-wrapper {
+    overflow-x: auto;
+}
+.status-active {
+    color: #4ade80;
+}
+.status-blocked {
+    color: #f87171;
+}
+.actions {
+    display: flex;
+    gap: 8px;
+}
+.btn-icon {
+    background: rgba(79,124,255,0.15);
+    border: none;
+    padding: 6px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+.btn-icon:hover {
+    background: rgba(79,124,255,0.3);
+}
+.btn-icon.delete:hover {
+    background: rgba(248,113,113,0.3);
+}
+
+/* ==================== МОДАЛЬНЫЕ ОКНА ==================== */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-content {
+    background: #121a33;
+    border-radius: 16px;
+    padding: 24px;
+    width: 90%;
+    max-width: 550px;
+    border: 1px solid rgba(255,255,255,0.1);
+    position: relative;
+}
+.modal-content .close {
+    position: absolute;
+    top: 16px;
+    right: 20px;
+    font-size: 24px;
+    cursor: pointer;
+    color: rgba(233,238,252,0.6);
+}
+.modal-content .close:hover {
+    color: white;
+}
+.modal-content label {
+    margin-top: 12px;
+    margin-bottom: 4px;
+}
+.modal-content input,
+.modal-content select {
+    width: 100%;
+}
+.modal-content button {
+    margin-right: 12px;
+}
+
+/* ==================== КНОПКИ ==================== */
+.btn-primary {
+    background: #4f7cff;
+    border: none;
+    color: white;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-primary:hover {
+    background: #3b66e0;
+}
+.btn-secondary {
+    background: #1e293b;
+    color: #e9eefc;
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-secondary:hover {
+    background: #334155;
+}
+
+/* ==================== ЧЕКБОКСЫ ПРАВ ==================== */
+.permissions-group {
+    background: rgba(79,124,255,0.08);
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin: 16px 0;
+}
+
+.permissions-group .perm-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    cursor: pointer;
+}
+
+.permissions-group .perm-item:last-child {
+    border-bottom: none;
+}
+
+.permissions-group .perm-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.permissions-group .perm-item span {
+    font-size: 13px;
+    cursor: pointer;
+    color: rgba(233,238,252,0.9);
+}
+
+.permissions-group .perm-item:hover {
+    background: rgba(79,124,255,0.05);
+    margin: 0 -8px;
+    padding-left: 8px;
+    padding-right: 8px;
+    border-radius: 8px;
+}
+
+/* ==================== ПОДПИСЧИКИ: ПОИСК И ССЫЛКИ ==================== */
+.subscriber-search-wrapper {
+    position: relative;
+}
+.subscriber-search-wrapper input:focus {
+    outline: none;
+    border-color: #4f7cff;
+}
+.task-link-cell .task-link {
+    color: #9bb7ff;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: color 0.2s;
+}
+.task-link-cell .task-link:hover {
+    color: #4f7cff;
+    text-decoration: underline;
+}
+.highlight-row {
+    background-color: rgba(79,124,255,0.15) !important;
+}
+
+/* ==================== КАРТОЧКИ И ССЫЛКИ ==================== */
+.card {
+    background: #121a33;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 20px;
+}
+.footer.muted {
+    margin-top: 20px;
+    color: rgba(233,238,252,0.7);
+}
+.footer.muted a {
+    color: #9bb7ff;
+    text-decoration: none;
+}
+.footer.muted a:hover {
+    text-decoration: underline;
+}
+
+/* ==================== АДАПТИВНОСТЬ ==================== */
+@media (max-width: 768px) {
+    .admin-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding-bottom: 6px;
+    }
+
+    .admin-tabs .tab {
+        padding: 8px 12px;
+        font-size: 13px;
+        border-radius: 8px;
+        background: rgba(79,124,255,0.1);
+        flex: 1 0 auto;
+        text-align: center;
+        min-width: 80px;
+    }
+
+    .admin-tabs .tab.active {
+        background: #4f7cff;
+    }
+
+    /* Адаптивные модальные окна */
+    .modal-content {
+        width: 95%;
+        max-width: 95%;
+        margin: 16px;
+        padding: 20px;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+
+    .modal-content h3 {
+        font-size: 18px;
+        margin-right: 24px;
+    }
+
+    .modal-content .close {
+        top: 12px;
+        right: 16px;
+        font-size: 24px;
+    }
+
+    /* Адаптивные таблицы - горизонтальная прокрутка */
+    .users-table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .users-table {
+        min-width: 600px;
+    }
+
+    .users-table th,
+    .users-table td {
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+
+    /* Кнопки действий в таблице */
+    .actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .btn-icon {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
+    /* Заголовок карточки */
+    .users-header {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start !important;
+    }
+
+    .users-header h3 {
+        font-size: 18px;
+    }
+
+    .btn-primary {
+        padding: 8px 14px;
+        font-size: 12px;
+        width: 100%;
+        text-align: center;
+    }
+
+    /* Группы чекбоксов */
+    .permissions-group {
+        padding: 10px 12px;
+    }
+
+    .permissions-group .perm-item {
+        padding: 8px 0;
+        gap: 10px;
+    }
+
+    .permissions-group .perm-item span {
+        font-size: 12px;
+    }
+
+    /* Подписчики */
+    .subscriber-search-wrapper {
+        width: 100%;
+    }
+    .subscriber-search-wrapper input {
+        width: 100%;
+        min-width: auto;
+    }
+    .users-header .btn-primary {
+        width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .admin-tabs {
+        gap: 4px;
+    }
+
+    .admin-tabs .tab {
+        padding: 6px 8px;
+        font-size: 11px;
+        min-width: 70px;
+    }
+
+    .users-table th,
+    .users-table td {
+        padding: 6px 8px;
+        font-size: 11px;
+    }
+
+    .btn-icon {
+        padding: 4px 8px;
+        font-size: 11px;
+    }
+
+    .modal-content {
+        padding: 16px;
+    }
+
+    .modal-content label {
+        font-size: 12px;
+    }
+
+    .modal-content input,
+    .modal-content select {
+        padding: 8px 10px;
+        font-size: 13px;
+    }
+
+    .modal-content button {
+        padding: 8px 12px;
+        font-size: 13px;
+    }
+}
